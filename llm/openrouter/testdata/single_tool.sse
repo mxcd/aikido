@@ -1,0 +1,14 @@
+data: {"id":"gen-2","object":"chat.completion.chunk","created":1714402400,"model":"anthropic/claude-sonnet-4-6","choices":[{"index":0,"delta":{"role":"assistant","content":""},"finish_reason":null}]}
+
+data: {"id":"gen-2","choices":[{"index":0,"delta":{"content":"Let me check that file."},"finish_reason":null}]}
+
+data: {"id":"gen-2","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_abc","type":"function","function":{"name":"read_file","arguments":""}}]},"finish_reason":null}]}
+
+data: {"id":"gen-2","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\"path\":"}}]},"finish_reason":null}]}
+
+data: {"id":"gen-2","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"\"README.md\"}"}}]},"finish_reason":null}]}
+
+data: {"id":"gen-2","choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}],"usage":{"prompt_tokens":92,"completion_tokens":24,"total_tokens":116,"cost":0.000348}}
+
+data: [DONE]
+

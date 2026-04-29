@@ -1,0 +1,10 @@
+data: {"id":"gen-5","object":"chat.completion.chunk","created":1714402600,"model":"openai/gpt-4o","choices":[{"index":0,"delta":{"role":"assistant","content":""},"finish_reason":null}]}
+
+data: {"id":"gen-5","choices":[{"index":0,"delta":{"content":"Working on it"},"finish_reason":null}]}
+
+data: {"id":"gen-5","choices":[{"index":0,"delta":{"content":"..."},"finish_reason":null}]}
+
+data: {"id":"gen-5","object":"chat.completion.chunk","provider":"openai","error":{"code":"server_error","message":"Provider disconnected"},"choices":[{"index":0,"delta":{"content":""},"finish_reason":"error"}]}
+
+data: [DONE]
+

@@ -1,0 +1,14 @@
+data: {"id":"gen-6","object":"chat.completion.chunk","created":1714402700,"model":"anthropic/claude-sonnet-4-6","choices":[{"index":0,"delta":{"role":"assistant","content":""},"finish_reason":null}]}
+
+data: {"id":"gen-6","choices":[{"index":0,"delta":{"reasoning":"Let me think about this carefully. "},"finish_reason":null}]}
+
+data: {"id":"gen-6","choices":[{"index":0,"delta":{"reasoning":"The user wants a short answer."},"finish_reason":null}]}
+
+data: {"id":"gen-6","choices":[{"index":0,"delta":{"content":"42"},"finish_reason":null}]}
+
+data: {"id":"gen-6","choices":[{"index":0,"delta":{"content":"."},"finish_reason":null}]}
+
+data: {"id":"gen-6","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":24,"completion_tokens":12,"total_tokens":36,"completion_tokens_details":{"reasoning_tokens":8},"cost":0.000108}}
+
+data: [DONE]
+

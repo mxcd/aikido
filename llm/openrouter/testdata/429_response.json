@@ -1,0 +1,17 @@
+{
+  "status": 429,
+  "headers": {
+    "Content-Type": "application/json",
+    "X-RateLimit-Limit": "1000",
+    "X-RateLimit-Remaining": "0",
+    "X-RateLimit-Reset": "1741305600000",
+    "Retry-After": "1"
+  },
+  "body": {
+    "error": {
+      "code": 429,
+      "message": "Rate limit exceeded for anthropic/claude-sonnet-4-6",
+      "metadata": {}
+    }
+  }
+}

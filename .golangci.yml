@@ -1,0 +1,57 @@
+version: "2"
+
+run:
+  timeout: 5m
+  go: "1.23"
+
+linters:
+  default: none
+  enable:
+    - errcheck
+    - govet
+    - ineffassign
+    - staticcheck
+    - unused
+    - misspell
+    - revive
+    - gocritic
+    - bodyclose
+  settings:
+    revive:
+      rules:
+        - name: exported
+          disabled: true
+    gocritic:
+      disabled-checks:
+        - ifElseChain
+        - singleCaseSwitch
+        - exitAfterDefer
+    errcheck:
+      exclude-functions:
+        - (io.Closer).Close
+        - (*net/http.Response).Body.Close
+        - fmt.Fprint
+        - fmt.Fprintf
+        - fmt.Fprintln
+  exclusions:
+    rules:
+      - path: _test\.go
+        linters:
+          - errcheck
+          - gocritic
+          - staticcheck
+      - path: examples/
+        linters:
+          - errcheck
+          - revive
+      - path: cmd/
+        linters:
+          - errcheck
+      - source: 'defer .*\.Close\(\)'
+        linters:
+          - errcheck
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
