@@ -85,16 +85,44 @@ type streamChunk struct {
 }
 
 type streamChoice struct {
-	Index        int         `json:"index"`
-	Delta        streamDelta `json:"delta"`
-	FinishReason *string     `json:"finish_reason,omitempty"`
+	Index int `json:"index"`
+	// Delta carries fragment-style updates for streaming responses.
+	Delta streamDelta `json:"delta"`
+	// Message carries the fully-assembled assistant message. Image-capable
+	// OpenRouter models (e.g. gemini-2.5-flash-image-preview) deliver the
+	// generated image in a single SSE chunk under `choices[0].message`
+	// instead of `choices[0].delta`.
+	Message      *streamDelta `json:"message,omitempty"`
+	FinishReason *string      `json:"finish_reason,omitempty"`
 }
 
 type streamDelta struct {
 	Role      string             `json:"role,omitempty"`
-	Content   string             `json:"content,omitempty"`
+	Content   json.RawMessage    `json:"content,omitempty"`
 	ToolCalls []toolCallFragment `json:"tool_calls,omitempty"`
 	Reasoning string             `json:"reasoning,omitempty"`
+	Images    []apiImagePart     `json:"images,omitempty"`
+}
+
+// apiImagePart is the OpenRouter assistant image envelope, present on either
+// streaming `delta.images[]` or non-streaming `message.images[]`. Wire shape
+// per OpenRouter image-capable models (gemini-2.5-flash-image-preview, gpt-image-1).
+type apiImagePart struct {
+	Type     string       `json:"type"`
+	ImageURL *apiImageURL `json:"image_url,omitempty"`
+}
+
+type apiImageURL struct {
+	URL string `json:"url"`
+}
+
+// apiContentPart is a typed content block. Some image-capable models embed
+// generated images inside `message.content` as a typed-parts array rather
+// than (or in addition to) the dedicated `images` field.
+type apiContentPart struct {
+	Type     string       `json:"type"`
+	Text     string       `json:"text,omitempty"`
+	ImageURL *apiImageURL `json:"image_url,omitempty"`
 }
 
 type toolCallFragment struct {

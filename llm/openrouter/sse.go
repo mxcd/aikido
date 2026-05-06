@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -93,17 +94,12 @@ func processStream(ctx context.Context, body io.Reader, out chan<- llm.Event) {
 
 		// Per-choice processing. Single-choice in practice, but be tolerant.
 		for _, ch := range chunk.Choices {
-			// Text content fragment.
-			if ch.Delta.Content != "" {
-				emit(ctx, out, llm.Event{Kind: llm.EventTextDelta, Text: ch.Delta.Content})
-			}
-			// Reasoning / thinking fragment.
-			if ch.Delta.Reasoning != "" {
-				emit(ctx, out, llm.Event{Kind: llm.EventThinking, Text: ch.Delta.Reasoning})
-			}
-			// Tool-call fragments.
-			for _, frag := range ch.Delta.ToolCalls {
-				asm.feed(frag)
+			emitPayload(ctx, out, asm, ch.Delta)
+			// Some image-capable models deliver the generated image as a
+			// non-streaming `choices[0].message` payload instead of a `delta`.
+			// Process both shapes; harmless when only one is populated.
+			if ch.Message != nil {
+				emitPayload(ctx, out, asm, *ch.Message)
 			}
 			// finish_reason — assemble and emit any pending tool calls.
 			if ch.FinishReason != nil {
@@ -169,6 +165,35 @@ func emitAssembledCalls(ctx context.Context, out chan<- llm.Event, calls []llm.T
 	}
 }
 
+// emitPayload emits text / image / thinking events from one delta-or-message
+// payload and feeds tool-call fragments into the assembler. Used for both
+// streaming `delta` and non-streaming `message` shapes.
+func emitPayload(ctx context.Context, out chan<- llm.Event, asm *toolCallAssembler, p streamDelta) {
+	// Text content fragment. `content` is RawMessage so we can also detect
+	// inline image-data URIs and typed content arrays that some image-capable
+	// models emit in place of (or alongside) `images`.
+	if text, imgs := decodeDeltaContent(p.Content); text != "" || len(imgs) > 0 {
+		if text != "" {
+			emit(ctx, out, llm.Event{Kind: llm.EventTextDelta, Text: text})
+		}
+		for i := range imgs {
+			img := imgs[i]
+			emit(ctx, out, llm.Event{Kind: llm.EventImage, Image: &img})
+		}
+	}
+	if p.Reasoning != "" {
+		emit(ctx, out, llm.Event{Kind: llm.EventThinking, Text: p.Reasoning})
+	}
+	for _, ip := range p.Images {
+		if img, ok := decodeAPIImagePart(ip); ok {
+			emit(ctx, out, llm.Event{Kind: llm.EventImage, Image: &img})
+		}
+	}
+	for _, frag := range p.ToolCalls {
+		asm.feed(frag)
+	}
+}
+
 // toolCallAssembler buffers incoming fragments by index and produces complete
 // llm.ToolCalls when finalized.
 type toolCallAssembler struct {
@@ -201,6 +226,109 @@ func (a *toolCallAssembler) feed(frag toolCallFragment) {
 	if frag.Function.Arguments != "" {
 		p.args.WriteString(frag.Function.Arguments)
 	}
+}
+
+// decodeDeltaContent extracts plain text and any inline images from a
+// streaming `delta.content` (or non-streaming `message.content`) field.
+//
+// OpenRouter's image-capable models surface generated images in three
+// observed shapes:
+//
+//  1. A plain JSON string — usually descriptive text, but occasionally a raw
+//     `data:image/...;base64,...` URI for tiny single-image responses.
+//  2. A typed-parts array — `[{type:"text",text:"..."}, {type:"image_url",
+//     image_url:{url:"data:..."}}]`.
+//  3. The dedicated `images` field on the message/delta envelope (handled
+//     separately by the caller).
+//
+// Empty input or a JSON null returns ("", nil). Unknown shapes return ("", nil)
+// rather than erroring — be permissive on the wire.
+func decodeDeltaContent(raw json.RawMessage) (string, []llm.ImagePart) {
+	if len(raw) == 0 || bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+		return "", nil
+	}
+	// Plain string — most common.
+	var s string
+	if err := json.Unmarshal(raw, &s); err == nil {
+		if strings.HasPrefix(s, "data:image/") {
+			if img, ok := decodeDataURI(s); ok {
+				return "", []llm.ImagePart{img}
+			}
+		}
+		return s, nil
+	}
+	// Typed-parts array.
+	var parts []apiContentPart
+	if err := json.Unmarshal(raw, &parts); err == nil {
+		var (
+			sb     strings.Builder
+			images []llm.ImagePart
+		)
+		for _, p := range parts {
+			switch p.Type {
+			case "text":
+				sb.WriteString(p.Text)
+			case "image_url":
+				if p.ImageURL == nil {
+					continue
+				}
+				if img, ok := decodeImageURL(p.ImageURL.URL); ok {
+					images = append(images, img)
+				}
+			}
+		}
+		return sb.String(), images
+	}
+	return "", nil
+}
+
+// decodeAPIImagePart maps one apiImagePart onto an llm.ImagePart, decoding
+// data: URIs into bytes and leaving HTTP URLs as-is. Returns false on missing
+// or unrecognized shapes.
+func decodeAPIImagePart(p apiImagePart) (llm.ImagePart, bool) {
+	if p.ImageURL == nil {
+		return llm.ImagePart{}, false
+	}
+	return decodeImageURL(p.ImageURL.URL)
+}
+
+// decodeImageURL converts a URL string into an llm.ImagePart. data: URIs are
+// decoded into bytes; other URLs are passed through verbatim. Returns false
+// on empty or malformed input.
+func decodeImageURL(url string) (llm.ImagePart, bool) {
+	if url == "" {
+		return llm.ImagePart{}, false
+	}
+	if strings.HasPrefix(url, "data:") {
+		return decodeDataURI(url)
+	}
+	return llm.ImagePart{URL: url}, true
+}
+
+// decodeDataURI parses a `data:<mime>;base64,<payload>` URI into an ImagePart.
+// Non-base64 data URIs and malformed inputs return false.
+func decodeDataURI(uri string) (llm.ImagePart, bool) {
+	if !strings.HasPrefix(uri, "data:") {
+		return llm.ImagePart{}, false
+	}
+	rest := uri[len("data:"):]
+	comma := strings.IndexByte(rest, ',')
+	if comma < 0 {
+		return llm.ImagePart{}, false
+	}
+	meta := rest[:comma]
+	payload := rest[comma+1:]
+	if !strings.HasSuffix(meta, ";base64") {
+		// non-base64 data URIs are valid HTTP-spec but unused by the providers
+		// we target; surface only the URL so callers can still see them.
+		return llm.ImagePart{URL: uri, ContentType: meta}, true
+	}
+	contentType := strings.TrimSuffix(meta, ";base64")
+	data, err := base64.StdEncoding.DecodeString(payload)
+	if err != nil {
+		return llm.ImagePart{}, false
+	}
+	return llm.ImagePart{ContentType: contentType, Data: data}, true
 }
 
 // flush returns the assembled tool calls in ascending index order and resets
