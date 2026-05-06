@@ -9,9 +9,16 @@ const (
 	RoleTool      Role = "tool"
 )
 
+// ImagePart is one image attached to a message or returned by an image-capable
+// model. URL is set when the provider returned a remote URL or when the caller
+// supplied a data URI / remote URL on input. Data is set when the provider
+// returned inline bytes (decoded from a data: URI) or when the caller wants to
+// inline an image on output. ContentType is the MIME type when known
+// ("image/png", "image/jpeg", ...) — empty when not provided by the wire.
 type ImagePart struct {
 	URL         string
 	ContentType string
+	Data        []byte
 }
 
 type ToolCall struct {

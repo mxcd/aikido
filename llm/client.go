@@ -19,6 +19,7 @@ const (
 	EventTextDelta EventKind = "text_delta"
 	EventToolCall  EventKind = "tool_call"
 	EventThinking  EventKind = "thinking"
+	EventImage     EventKind = "image"
 	EventUsage     EventKind = "usage"
 	EventError     EventKind = "error"
 	EventEnd       EventKind = "end"
@@ -29,6 +30,7 @@ type Event struct {
 	Kind  EventKind
 	Text  string
 	Tool  *ToolCall
+	Image *ImagePart
 	Usage *Usage
 	Err   error
 }
