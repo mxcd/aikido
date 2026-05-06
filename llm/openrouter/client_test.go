@@ -672,5 +672,136 @@ data: [DONE]
 	}
 }
 
+// TestStream_ImageStreamingDelta covers the streaming `delta.images[]` shape
+// that image-capable models emit when streaming generated images. The base64
+// data URI is decoded into bytes; the remote URL is passed through verbatim.
+func TestStream_ImageStreamingDelta(t *testing.T) {
+	t.Parallel()
+	body := loadFixture(t, "image_streaming_delta.sse")
+	srv := httptest.NewServer(sseHandler(t, body))
+	defer srv.Close()
+	c := newTestClient(t, srv)
+
+	ch, err := c.Stream(context.Background(), llm.Request{Model: "google/gemini-2.5-flash-image-preview"})
+	if err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	events := drain(t, ch, 2*time.Second)
+
+	var (
+		text   string
+		images []llm.ImagePart
+	)
+	for _, ev := range events {
+		switch ev.Kind {
+		case llm.EventTextDelta:
+			text += ev.Text
+		case llm.EventImage:
+			if ev.Image == nil {
+				t.Fatal("EventImage with nil Image")
+			}
+			images = append(images, *ev.Image)
+		}
+	}
+	if text != "Here is the requested image:" {
+		t.Errorf("text = %q", text)
+	}
+	if len(images) != 2 {
+		t.Fatalf("images = %d, want 2", len(images))
+	}
+	// First: data URI → decoded bytes.
+	if images[0].ContentType != "image/png" {
+		t.Errorf("images[0].ContentType = %q", images[0].ContentType)
+	}
+	if len(images[0].Data) == 0 {
+		t.Error("images[0].Data is empty; data URI should have been decoded")
+	}
+	if images[0].URL != "" {
+		t.Errorf("images[0].URL = %q; data URI should have been consumed", images[0].URL)
+	}
+	// Second: remote URL pass-through.
+	if images[1].URL != "https://cdn.example.com/img/abc123.png" {
+		t.Errorf("images[1].URL = %q", images[1].URL)
+	}
+	if len(images[1].Data) != 0 {
+		t.Errorf("images[1].Data nonempty for URL-only image: %d bytes", len(images[1].Data))
+	}
+	assertEventOrder(t, events)
+}
+
+// TestStream_ImageMessageNonStream covers the case where the provider returns
+// the entire assistant message in a single chunk with `choices[0].message`
+// (rather than `delta`) populated.
+func TestStream_ImageMessageNonStream(t *testing.T) {
+	t.Parallel()
+	body := loadFixture(t, "image_message_nonstream.sse")
+	srv := httptest.NewServer(sseHandler(t, body))
+	defer srv.Close()
+	c := newTestClient(t, srv)
+
+	ch, err := c.Stream(context.Background(), llm.Request{Model: "openai/gpt-image-1"})
+	if err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	events := drain(t, ch, 2*time.Second)
+
+	var images []llm.ImagePart
+	for _, ev := range events {
+		if ev.Kind == llm.EventImage && ev.Image != nil {
+			images = append(images, *ev.Image)
+		}
+	}
+	if len(images) != 1 {
+		t.Fatalf("images = %d, want 1", len(images))
+	}
+	if images[0].ContentType != "image/jpeg" {
+		t.Errorf("ContentType = %q", images[0].ContentType)
+	}
+	if len(images[0].Data) == 0 {
+		t.Error("Data not decoded")
+	}
+}
+
+// TestStream_ImageInlineContent covers the typed-parts-array content shape
+// where the image lives inside `message.content` as an `image_url` part
+// alongside one or more `text` parts.
+func TestStream_ImageInlineContent(t *testing.T) {
+	t.Parallel()
+	body := loadFixture(t, "image_inline_content.sse")
+	srv := httptest.NewServer(sseHandler(t, body))
+	defer srv.Close()
+	c := newTestClient(t, srv)
+
+	ch, err := c.Stream(context.Background(), llm.Request{Model: "google/gemini-2.5-flash-image-preview"})
+	if err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	events := drain(t, ch, 2*time.Second)
+
+	var (
+		text   string
+		images []llm.ImagePart
+	)
+	for _, ev := range events {
+		switch ev.Kind {
+		case llm.EventTextDelta:
+			text += ev.Text
+		case llm.EventImage:
+			if ev.Image != nil {
+				images = append(images, *ev.Image)
+			}
+		}
+	}
+	if text != "Generated." {
+		t.Errorf("text = %q", text)
+	}
+	if len(images) != 1 {
+		t.Fatalf("images = %d, want 1", len(images))
+	}
+	if images[0].ContentType != "image/webp" || len(images[0].Data) == 0 {
+		t.Errorf("images[0] = %+v", images[0])
+	}
+}
+
 // quiet a "fmt unused" warning if the package later doesn't need it
 var _ = fmt.Sprintf

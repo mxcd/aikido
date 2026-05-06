@@ -1,0 +1,12 @@
+data: {"id":"gen-img-1","object":"chat.completion.chunk","created":1714402600,"model":"google/gemini-2.5-flash-image-preview","choices":[{"index":0,"delta":{"role":"assistant","content":""},"finish_reason":null}]}
+
+data: {"id":"gen-img-1","choices":[{"index":0,"delta":{"content":"Here is the requested image:"},"finish_reason":null}]}
+
+data: {"id":"gen-img-1","choices":[{"index":0,"delta":{"images":[{"type":"image_url","image_url":{"url":"data:image/png;base64,iVBORw0KGgo="}}]},"finish_reason":null}]}
+
+data: {"id":"gen-img-1","choices":[{"index":0,"delta":{"images":[{"type":"image_url","image_url":{"url":"https://cdn.example.com/img/abc123.png"}}]},"finish_reason":null}]}
+
+data: {"id":"gen-img-1","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":12,"completion_tokens":1024,"total_tokens":1036,"cost":0.001234}}
+
+data: [DONE]
+

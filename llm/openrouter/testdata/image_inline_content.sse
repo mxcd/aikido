@@ -1,0 +1,4 @@
+data: {"id":"gen-img-3","object":"chat.completion","created":1714402800,"model":"google/gemini-2.5-flash-image-preview","choices":[{"index":0,"message":{"role":"assistant","content":[{"type":"text","text":"Generated."},{"type":"image_url","image_url":{"url":"data:image/webp;base64,UklGRgAAAABXRUJQVlA4IAAAAAAA"}}]},"finish_reason":"stop"}],"usage":{"prompt_tokens":7,"completion_tokens":3,"total_tokens":10,"cost":0.0001}}
+
+data: [DONE]
+

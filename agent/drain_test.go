@@ -78,6 +78,69 @@ func TestDrain_FirstError(t *testing.T) {
 	}
 }
 
+func TestDrain_AssistantImagesAccumulated(t *testing.T) {
+	pngBytes := []byte{0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a}
+	ch := make(chan Event, 8)
+	ch <- Event{Kind: EventText, Text: "here it is"}
+	ch <- Event{Kind: EventImage, Image: &llm.ImagePart{ContentType: "image/png", Data: pngBytes}}
+	ch <- Event{Kind: EventImage, Image: &llm.ImagePart{URL: "https://example.com/x.png"}}
+	ch <- Event{Kind: EventEnd, EndReason: EndReasonStop}
+	close(ch)
+
+	msgs, err := Drain(ch)
+	if err != nil {
+		t.Fatalf("Drain: %v", err)
+	}
+	if len(msgs) != 1 {
+		t.Fatalf("len(msgs) = %d, want 1", len(msgs))
+	}
+	got := msgs[0]
+	if got.Role != llm.RoleAssistant || got.Content != "here it is" {
+		t.Errorf("msg = %+v", got)
+	}
+	if len(got.Images) != 2 {
+		t.Fatalf("Images = %d, want 2", len(got.Images))
+	}
+	if string(got.Images[0].Data) != string(pngBytes) || got.Images[0].ContentType != "image/png" {
+		t.Errorf("Images[0] = %+v", got.Images[0])
+	}
+	if got.Images[1].URL != "https://example.com/x.png" {
+		t.Errorf("Images[1] = %+v", got.Images[1])
+	}
+}
+
+func TestRunWithMessages_ImagesPropagateThroughAgent(t *testing.T) {
+	pngBytes := []byte{0x89, 0x50, 0x4e, 0x47}
+	stub := llmtest.NewStubClient(llmtest.TurnScript{Events: []llm.Event{
+		{Kind: llm.EventTextDelta, Text: "drawing"},
+		{Kind: llm.EventImage, Image: &llm.ImagePart{ContentType: "image/png", Data: pngBytes}},
+		{Kind: llm.EventEnd},
+	}})
+	s, err := NewLocalSession(&SessionOptions{
+		ID: "img", Client: stub, Model: "image-model",
+	})
+	if err != nil {
+		t.Fatalf("NewLocalSession: %v", err)
+	}
+	ch, _ := s.RunWithMessages(context.Background(), []llm.Message{
+		{Role: llm.RoleUser, Content: "draw a koan"},
+	})
+	produced, err := Drain(ch)
+	if err != nil {
+		t.Fatalf("Drain: %v", err)
+	}
+	if len(produced) != 1 {
+		t.Fatalf("produced = %d, want 1", len(produced))
+	}
+	asst := produced[0]
+	if asst.Role != llm.RoleAssistant || asst.Content != "drawing" {
+		t.Errorf("asst = %+v", asst)
+	}
+	if len(asst.Images) != 1 || string(asst.Images[0].Data) != string(pngBytes) {
+		t.Errorf("asst.Images = %+v", asst.Images)
+	}
+}
+
 func TestRunWithMessages_DrainEndToEnd(t *testing.T) {
 	stub := llmtest.NewStubClient(llmtest.TurnScript{Events: []llm.Event{
 		{Kind: llm.EventTextDelta, Text: "answer"},
