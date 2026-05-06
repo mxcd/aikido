@@ -34,7 +34,7 @@ func main() {
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
 
-	text, _, usage, err := llm.Collect(ctx, client, llm.Request{
+	text, _, _, usage, err := llm.Collect(ctx, client, llm.Request{
 		Model: "anthropic/claude-haiku-4.5",
 		Messages: []llm.Message{
 			{Role: llm.RoleSystem, Content: "Be concise. Reply in one sentence."},

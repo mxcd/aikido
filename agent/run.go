@@ -114,7 +114,7 @@ func (s *Session) runLoop(userCtx context.Context, out chan<- Event, userText st
 			return
 		}
 
-		text, calls, usage, drainErr := s.drainProviderStream(callCtx, events, out)
+		text, calls, images, usage, drainErr := s.drainProviderStream(callCtx, events, out)
 		callErr := callCtx.Err()
 		cancelCall()
 
@@ -130,6 +130,7 @@ func (s *Session) runLoop(userCtx context.Context, out chan<- Event, userText st
 		assistantMsg := llm.Message{
 			Role:      llm.RoleAssistant,
 			Content:   text,
+			Images:    images,
 			ToolCalls: calls,
 		}
 		msgs = append(msgs, assistantMsg)
@@ -185,18 +186,18 @@ func (s *Session) dispatch(ctx context.Context, call llm.ToolCall, env tools.Env
 	return s.opts.Tools.Dispatch(ctx, call, env)
 }
 
-// drainProviderStream consumes the provider's stream, forwarding TextDelta
-// and Thinking events to the caller's channel and accumulating text, tool
-// calls, and usage for the agent loop.
-func (s *Session) drainProviderStream(ctx context.Context, events <-chan llm.Event, out chan<- Event) (text string, calls []llm.ToolCall, usage *llm.Usage, err error) {
+// drainProviderStream consumes the provider's stream, forwarding TextDelta,
+// Thinking, and Image events to the caller's channel and accumulating text,
+// tool calls, images, and usage for the agent loop.
+func (s *Session) drainProviderStream(ctx context.Context, events <-chan llm.Event, out chan<- Event) (text string, calls []llm.ToolCall, images []llm.ImagePart, usage *llm.Usage, err error) {
 	var sb strings.Builder
 	for {
 		select {
 		case <-ctx.Done():
-			return sb.String(), calls, usage, ctx.Err()
+			return sb.String(), calls, images, usage, ctx.Err()
 		case ev, ok := <-events:
 			if !ok {
-				return sb.String(), calls, usage, err
+				return sb.String(), calls, images, usage, err
 			}
 			switch ev.Kind {
 			case llm.EventTextDelta:
@@ -207,6 +208,12 @@ func (s *Session) drainProviderStream(ctx context.Context, events <-chan llm.Eve
 			case llm.EventToolCall:
 				if ev.Tool != nil {
 					calls = append(calls, *ev.Tool)
+				}
+			case llm.EventImage:
+				if ev.Image != nil {
+					images = append(images, *ev.Image)
+					img := *ev.Image
+					out <- Event{Kind: EventImage, Image: &img}
 				}
 			case llm.EventUsage:
 				usage = ev.Usage

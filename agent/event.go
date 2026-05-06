@@ -11,6 +11,7 @@ const (
 	EventThinking   EventKind = "thinking"
 	EventToolCall   EventKind = "tool_call"
 	EventToolResult EventKind = "tool_result"
+	EventImage      EventKind = "image"
 	EventUsage      EventKind = "usage"
 	EventError      EventKind = "error"
 	EventEnd        EventKind = "end"
@@ -40,6 +41,7 @@ type Event struct {
 	Text       string
 	ToolCall   *llm.ToolCall
 	ToolResult *ToolResult
+	Image      *llm.ImagePart
 	Usage      *llm.Usage
 	Err        error
 	EndReason  string

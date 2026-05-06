@@ -15,25 +15,26 @@ func Float32(v float32) *float32 {
 
 // Collect drains a stream into a final result. Useful for non-streaming callers.
 //
-// Returns text accumulated from EventTextDelta, all complete tool calls, final
-// Usage if the provider emitted one, and the first error encountered. Thinking
-// text is not included in the returned text.
+// Returns text accumulated from EventTextDelta, all complete tool calls, all
+// images surfaced by the provider, final Usage if the provider emitted one,
+// and the first error encountered. Thinking text is not included in the
+// returned text.
 //
 // Collect respects ctx cancellation: if ctx is cancelled before the stream
 // closes, Collect returns ctx.Err() without waiting for the producer.
-func Collect(ctx context.Context, c Client, req Request) (text string, calls []ToolCall, usage *Usage, err error) {
+func Collect(ctx context.Context, c Client, req Request) (text string, calls []ToolCall, images []ImagePart, usage *Usage, err error) {
 	events, err := c.Stream(ctx, req)
 	if err != nil {
-		return "", nil, nil, err
+		return "", nil, nil, nil, err
 	}
 	var sb strings.Builder
 	for {
 		select {
 		case <-ctx.Done():
-			return sb.String(), calls, usage, ctx.Err()
+			return sb.String(), calls, images, usage, ctx.Err()
 		case ev, ok := <-events:
 			if !ok {
-				return sb.String(), calls, usage, nil
+				return sb.String(), calls, images, usage, nil
 			}
 			switch ev.Kind {
 			case EventTextDelta:
@@ -42,10 +43,14 @@ func Collect(ctx context.Context, c Client, req Request) (text string, calls []T
 				if ev.Tool != nil {
 					calls = append(calls, *ev.Tool)
 				}
+			case EventImage:
+				if ev.Image != nil {
+					images = append(images, *ev.Image)
+				}
 			case EventUsage:
 				usage = ev.Usage
 			case EventError:
-				return sb.String(), calls, usage, ev.Err
+				return sb.String(), calls, images, usage, ev.Err
 			case EventThinking, EventEnd:
 				// thinking is not added to text; end is informational
 			}

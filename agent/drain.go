@@ -21,21 +21,24 @@ func Drain(events <-chan Event) ([]llm.Message, error) {
 		msgs           []llm.Message
 		accText        strings.Builder
 		accCalls       []llm.ToolCall
+		accImages      []llm.ImagePart
 		accToolResults []llm.Message
 		firstErr       error
 	)
 
 	flush := func() {
-		if accText.Len() > 0 || len(accCalls) > 0 {
+		if accText.Len() > 0 || len(accCalls) > 0 || len(accImages) > 0 {
 			msgs = append(msgs, llm.Message{
 				Role:      llm.RoleAssistant,
 				Content:   accText.String(),
+				Images:    append([]llm.ImagePart(nil), accImages...),
 				ToolCalls: append([]llm.ToolCall(nil), accCalls...),
 			})
 		}
 		msgs = append(msgs, accToolResults...)
 		accText.Reset()
 		accCalls = nil
+		accImages = nil
 		accToolResults = nil
 	}
 
@@ -51,6 +54,13 @@ func Drain(events <-chan Event) ([]llm.Message, error) {
 		case EventToolCall:
 			if ev.ToolCall != nil {
 				accCalls = append(accCalls, *ev.ToolCall)
+			}
+		case EventImage:
+			if ev.Image != nil {
+				if len(accToolResults) > 0 {
+					flush()
+				}
+				accImages = append(accImages, *ev.Image)
 			}
 		case EventToolResult:
 			if ev.ToolResult != nil {

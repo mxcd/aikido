@@ -67,7 +67,7 @@ func runChat(ctx context.Context, o chatOpts, out io.Writer, client llm.Client) 
 		req.Temperature = llm.Float32(float32(o.temperature))
 	}
 
-	text, _, usage, err := llm.Collect(ctx, client, req)
+	text, _, _, usage, err := llm.Collect(ctx, client, req)
 	if err != nil {
 		return err
 	}
