@@ -37,10 +37,13 @@ const (
     RoleTool      Role = "tool"
 )
 
-// ImagePart is one image attached to a message.
+// ImagePart is one image attached to a message or returned by an image-capable
+// model. URL is set on remote images; Data is set on inline bytes (decoded
+// from a `data:` URI by the provider adapter).
 type ImagePart struct {
-    URL         string // remote URL or data URI
-    ContentType string // populated when constructing from bytes
+    URL         string // remote URL (empty when Data is set)
+    ContentType string // MIME type ("image/png", ...); empty when not provided
+    Data        []byte // inline bytes (empty when URL is set)
 }
 
 // ToolCall is one tool invocation from the model. Arguments is complete JSON
@@ -152,6 +155,7 @@ const (
     EventTextDelta EventKind = "text_delta"
     EventToolCall  EventKind = "tool_call"   // emitted only after fragments fully assembled
     EventThinking  EventKind = "thinking"    // emitted by providers that surface reasoning fragments
+    EventImage     EventKind = "image"       // emitted by image-capable models; data: URIs decoded into bytes
     EventUsage     EventKind = "usage"
     EventError     EventKind = "error"
     EventEnd       EventKind = "end"         // always last; channel closes after
@@ -162,6 +166,7 @@ type Event struct {
     Kind  EventKind
     Text  string     // EventTextDelta or EventThinking
     Tool  *ToolCall  // EventToolCall
+    Image *ImagePart // EventImage
     Usage *Usage     // EventUsage
     Err   error      // EventError
 }
@@ -173,9 +178,10 @@ type Client interface {
 
 // Collect drains a stream into a final result. Useful for non-streaming callers.
 // Returns text accumulated from EventTextDelta, all complete tool calls,
-// final Usage if the provider emitted one, and the first error encountered.
-// EventThinking text is not included in the returned text.
-func Collect(ctx context.Context, c Client, req Request) (text string, calls []ToolCall, usage *Usage, err error)
+// every image surfaced by the provider, final Usage if the provider emitted
+// one, and the first error encountered. EventThinking text is not included
+// in the returned text.
+func Collect(ctx context.Context, c Client, req Request) (text string, calls []ToolCall, images []ImagePart, usage *Usage, err error)
 
 // Errors returned by providers and helpers.
 var (
@@ -541,6 +547,7 @@ const (
     EventThinking   EventKind = "thinking"
     EventToolCall   EventKind = "tool_call"
     EventToolResult EventKind = "tool_result"
+    EventImage      EventKind = "image"
     EventUsage      EventKind = "usage"
     EventError      EventKind = "error"
     EventEnd        EventKind = "end"
@@ -570,6 +577,7 @@ type Event struct {
     Text       string         // EventText or EventThinking
     ToolCall   *llm.ToolCall  // EventToolCall
     ToolResult *ToolResult    // EventToolResult
+    Image      *llm.ImagePart // EventImage
     Usage      *llm.Usage     // EventUsage
     Err        error          // EventError
     EndReason  string         // EventEnd

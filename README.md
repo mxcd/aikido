@@ -29,13 +29,38 @@ See [docs/v1/API.md](docs/v1/API.md) for the locked surface.
 ```go
 client, _ := openrouter.NewClient(&openrouter.Options{APIKey: os.Getenv("OPENROUTER_API_KEY")})
 
-text, _, usage, _ := llm.Collect(ctx, client, llm.Request{
+text, _, _, usage, _ := llm.Collect(ctx, client, llm.Request{
     Model:    "anthropic/claude-haiku-4.5",
     Messages: []llm.Message{{Role: llm.RoleUser, Content: "Give me one fun fact about Go."}},
 })
 fmt.Println(text)
 fmt.Printf("cost=$%.6f\n", usage.CostUSD)
 ```
+
+### Image generation
+
+Image-capable OpenRouter models (e.g. `google/gemini-2.5-flash-image-preview`,
+`openai/gpt-image-1`) surface generated images on the same `llm.Client`
+streaming surface. Inline `data:` URIs are decoded to bytes; remote URLs
+pass through verbatim. `Collect` returns them as the third positional value.
+
+```go
+_, _, images, _, _ := llm.Collect(ctx, client, llm.Request{
+    Model:    "google/gemini-2.5-flash-image-preview",
+    Messages: []llm.Message{{Role: llm.RoleUser, Content: "A pixel-art fox in tall grass."}},
+})
+for i, img := range images {
+    if len(img.Data) > 0 {
+        _ = os.WriteFile(fmt.Sprintf("out-%d.png", i), img.Data, 0o644)
+    } else if img.URL != "" {
+        fmt.Println("image at:", img.URL)
+    }
+}
+```
+
+When streaming, the same data flows as `llm.EventImage` events. In agent
+runs, `Drain` populates `llm.Message.Images` on the assembled assistant
+message, mirroring how `ToolCalls` are handled.
 
 ### Agent over a writable VFS
 
@@ -85,7 +110,7 @@ session, _ := agent.NewLocalSession(&agent.SessionOptions{
 
 The model can `search`, `list_files`, and `read_file` against the embedded markdown — but cannot mutate it. Defense in depth: `vfs/embedfs` would also reject mutations even if the tools were registered.
 
-Three runnable examples under [`examples/`](examples/): `chat-oneshot`, `agent-vfs`, `chatbot`.
+Four runnable examples under [`examples/`](examples/): `chat-oneshot`, `image-generation`, `agent-vfs`, `chatbot`.
 
 ## CLI
 
