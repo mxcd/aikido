@@ -444,3 +444,28 @@ Real-world traces from `asolabs/hub` show ~20% per-attempt failure rate on `goog
 **Decision.** Promote `internal/retry` → `retry`. The package surface (`Policy`, `Do`, `RetryAfterError`, `DefaultPolicy`) is unchanged. Add `llm.CollectWithRetry(ctx, client, req, retry.Policy)` and `llm.IsTransientServerError(err)` to give callers a one-line retry wrapper around `llm.Collect`. Add `llm.DefaultStreamingRetryPolicy()` returning a 5-attempt 2s-base 30s-cap policy tuned for image-gen preview models. The OpenRouter client's existing internal use of `retry.Do` continues unchanged — same package, just at the public path.
 
 **Consequences.** Callers wrapping streaming operations get the same retry primitives provider clients already use. The retry surface is now part of the v1 API and follows the v1 stability promise (additive changes only until v2). Cost note: failures still bill for partial tokens emitted before the abort; tune `MaxAttempts` with that in mind. Per-model retry policies (e.g., disable retry for non-preview models that are reliable) remain a caller-side concern.
+
+---
+
+## ADR-028 — Surface content-filter signals as a distinct error sentinel
+
+**Date:** 07.05.2026
+**Status:** Accepted (v0.2.3)
+
+**Context.** Provider safety policies (Google Gemini's image-gen classifier in particular) reject some prompts and signal it on the wire in two distinct shapes:
+
+1. **`finish_reason: "content_filter"`** on a `choices[].delta` chunk in an otherwise normal SSE stream.
+2. **A top-level `error` envelope** whose `code`/`message` indicates content filtering.
+
+Both shapes are deterministic per (prompt, model) pair. Until v0.2.3 the openrouter client lumped (1) in with normal `stop`/`tool_calls`/`length` finish reasons (silent — no signal to the caller) and flattened (2) into `ErrServerError` (indistinguishable from genuine 5xx flake). Callers that wrapped `Collect` with retry would burn the full retry budget on guaranteed-failing requests, and there was no clean way to render a "try a different prompt" error to end users.
+
+There's a third shape — **silent mid-stream RST** — where the provider just kills the connection without any structured chunk. We cannot detect this at the wire level; it surfaces as `ErrServerError` (still). Callers can heuristically classify "all retries failed identically" as content-filter at the call site, but the protocol gives us nothing there.
+
+**Decision.**
+- Add `llm.ErrContentFiltered` sentinel + `llm.IsContentFilter(err)` helper.
+- Detect `finish_reason: "content_filter"` and emit `EventError{Err: fmt.Errorf("...: %w", ErrContentFiltered)}` followed by the closing `EventEnd{FinishReason: "content_filter"}`.
+- Detect content-filter signals in the structured error envelope (string codes `"content_filter"`, `"content_policy_violation"`, `"safety"`, plus message-substring fallback) and emit the same `EventError` shape.
+- Add `Event.FinishReason string` (always populated on the closing `EventEnd` when the provider reported one) so callers can inspect the reason post-hoc without parsing strings.
+- Existing `IsTransientServerError` continues to match only `ErrServerError` — content-filter errors are correctly excluded from retry by default.
+
+**Consequences.** Hub-side and other callers can branch cleanly: skip retry on `IsContentFilter(err)`, render user-actionable "try different wording" copy, save the typically-multiple-cents per request that retrying a flagged prompt would otherwise burn. The `EventEnd.FinishReason` field is additive and safe under the v1 stability promise. Silent-RST content aborts remain unsolved at the protocol level — the caller-side "all-retries-identical" heuristic is the only signal there.

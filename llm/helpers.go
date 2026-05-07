@@ -38,6 +38,22 @@ func IsTransientServerError(err error) bool {
 	return errors.Is(err, ErrServerError)
 }
 
+// IsContentFilter reports whether err is a content-policy abort surfaced by the
+// provider (finish_reason="content_filter", an explicit error envelope with a
+// matching code/message, or any error wrapping ErrContentFiltered). Use this
+// to short-circuit retry — the same prompt will trip the classifier again on
+// the next attempt — and to render a "try different wording" message rather
+// than a generic "try again later".
+//
+// Note: providers sometimes mid-stream RST without sending a structured
+// content-filter signal. Those failures surface as ErrServerError and are
+// indistinguishable from genuine transient flake at the wire level. Callers
+// that want stronger detection can heuristically classify "all retries
+// failed identically" as a content-filter signal at the call-site.
+func IsContentFilter(err error) bool {
+	return errors.Is(err, ErrContentFiltered)
+}
+
 // DefaultStreamingRetryPolicy returns a sensible retry policy for image
 // generation and other streaming LLM operations: 5 attempts, 2s base, 30s cap,
 // 2x multiplier, 20% jitter, retrying only transient provider errors.

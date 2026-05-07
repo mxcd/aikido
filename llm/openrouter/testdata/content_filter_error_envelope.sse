@@ -1,0 +1,5 @@
+data: {"id":"gen-cf-2","object":"chat.completion.chunk","created":1714402710,"model":"google/gemini-3.1-flash-image-preview","choices":[{"index":0,"delta":{"role":"assistant","content":""},"finish_reason":null}]}
+
+data: {"id":"gen-cf-2","object":"chat.completion.chunk","provider":"google","error":{"code":"content_filter","message":"This prompt was blocked by the content filter."},"choices":[{"index":0,"delta":{"content":""},"finish_reason":"error"}]}
+
+data: [DONE]

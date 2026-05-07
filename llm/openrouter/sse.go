@@ -31,8 +31,19 @@ const sseDoneToken = "[DONE]"
 // Mid-stream errors (provider drops the connection mid-SSE, or the chunk
 // includes a top-level `error` envelope) are emitted as EventError followed
 // by EventEnd. They are NOT retried (per ADR-006 / ADR-022).
+//
+// Content-filter signals come in two forms (per ADR-028):
+//  1. finish_reason="content_filter" on a regular chunk — emitted as
+//     EventError{Err: ErrContentFiltered} so callers can branch on it.
+//  2. error envelope with code/message indicating content filtering — same.
+//
+// The closing EventEnd carries FinishReason populated from the provider's
+// last finish_reason (or "content_filter"/"error" when surfaced as an error).
 func processStream(ctx context.Context, body io.Reader, out chan<- llm.Event) {
-	defer emit(ctx, out, llm.Event{Kind: llm.EventEnd})
+	var endFinishReason string
+	defer func() {
+		emit(ctx, out, llm.Event{Kind: llm.EventEnd, FinishReason: endFinishReason})
+	}()
 
 	asm := newToolCallAssembler()
 	scanner := bufio.NewScanner(body)
@@ -84,9 +95,16 @@ func processStream(ctx context.Context, body io.Reader, out chan<- llm.Event) {
 			if msg == "" {
 				msg = "provider error"
 			}
+			cause := llm.ErrServerError
+			if isContentFilterErrorEnvelope(chunk.Error) {
+				cause = llm.ErrContentFiltered
+				endFinishReason = "content_filter"
+			} else {
+				endFinishReason = "error"
+			}
 			emit(ctx, out, llm.Event{
 				Kind: llm.EventError,
-				Err:  fmt.Errorf("openrouter mid-stream: %s: %w", msg, llm.ErrServerError),
+				Err:  fmt.Errorf("openrouter mid-stream: %s: %w", msg, cause),
 			})
 			sawError = true
 			break
@@ -103,7 +121,9 @@ func processStream(ctx context.Context, body io.Reader, out chan<- llm.Event) {
 			}
 			// finish_reason — assemble and emit any pending tool calls.
 			if ch.FinishReason != nil {
-				switch *ch.FinishReason {
+				reason := *ch.FinishReason
+				endFinishReason = reason
+				switch reason {
 				case "error":
 					// finish_reason "error" should have come with a top-level
 					// error envelope already handled above. If not, surface
@@ -116,8 +136,18 @@ func processStream(ctx context.Context, body io.Reader, out chan<- llm.Event) {
 						})
 						sawError = true
 					}
+				case "content_filter":
+					// Provider's safety policy aborted the generation. Surface
+					// distinctly so callers can skip retry and show a
+					// user-actionable error.
+					emitAssembledCalls(ctx, out, asm.flush())
+					emit(ctx, out, llm.Event{
+						Kind: llm.EventError,
+						Err:  fmt.Errorf("openrouter finish_reason=content_filter: %w", llm.ErrContentFiltered),
+					})
+					sawError = true
 				default:
-					// stop, tool_calls, length, content_filter — flush calls.
+					// stop, tool_calls, length — flush calls.
 					emitAssembledCalls(ctx, out, asm.flush())
 				}
 			}
@@ -362,4 +392,48 @@ func (a *toolCallAssembler) flush() []llm.ToolCall {
 	}
 	a.parts = make(map[int]*partialToolCall)
 	return out
+}
+
+// isContentFilterErrorEnvelope checks whether a structured error envelope
+// indicates content filtering. OpenRouter forwards provider-shaped error codes
+// in `error.code` (sometimes a string, sometimes an int HTTP status), and the
+// human message in `error.message`. We match the most common signals:
+//
+//   - code == "content_filter" or "content_policy_violation" or "safety" (string forms)
+//   - message contains "content filter", "safety", or "policy" (case-insensitive)
+//
+// False positives lead to the caller showing "try a different prompt" copy
+// instead of "try again later" — which is the correct user action either way
+// for any policy-related rejection. Conservative match preferred.
+func isContentFilterErrorEnvelope(e *apiError) bool {
+	if e == nil {
+		return false
+	}
+	if codeStr := decodeErrorCodeAsString(e.Code); codeStr != "" {
+		switch strings.ToLower(codeStr) {
+		case "content_filter", "content_policy_violation", "safety":
+			return true
+		}
+	}
+	msg := strings.ToLower(e.Message)
+	if strings.Contains(msg, "content filter") ||
+		strings.Contains(msg, "content policy") ||
+		strings.Contains(msg, "safety policy") ||
+		strings.Contains(msg, "safety filter") {
+		return true
+	}
+	return false
+}
+
+// decodeErrorCodeAsString returns the JSON-encoded code as a string when it's
+// a JSON string. Returns "" for numeric codes (HTTP status mirrors) or empty input.
+func decodeErrorCodeAsString(raw json.RawMessage) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	var s string
+	if err := json.Unmarshal(raw, &s); err == nil {
+		return s
+	}
+	return ""
 }

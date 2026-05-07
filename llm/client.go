@@ -33,6 +33,13 @@ type Event struct {
 	Image *ImagePart
 	Usage *Usage
 	Err   error
+
+	// FinishReason carries the provider's reported finish_reason on the chunk
+	// that closes a generation. Set on EventEnd (and on the EventError that
+	// stands in for finish_reason="content_filter"). Common values: "stop",
+	// "tool_calls", "length", "content_filter", "error". Empty when the
+	// provider didn't surface one.
+	FinishReason string
 }
 
 type Client interface {

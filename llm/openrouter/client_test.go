@@ -296,6 +296,95 @@ func TestStream_MidStreamError(t *testing.T) {
 	}
 }
 
+func TestStream_ContentFilterFinishReason(t *testing.T) {
+	t.Parallel()
+	body := loadFixture(t, "content_filter_finish_reason.sse")
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(body)
+	}))
+	defer srv.Close()
+	c := newTestClient(t, srv)
+
+	ch, err := c.Stream(context.Background(), llm.Request{Model: "google/gemini-3.1-flash-image-preview"})
+	if err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	events := drain(t, ch, 2*time.Second)
+
+	var errEv *llm.Event
+	var endEv *llm.Event
+	for i, ev := range events {
+		switch ev.Kind {
+		case llm.EventError:
+			errEv = &events[i]
+		case llm.EventEnd:
+			endEv = &events[i]
+		}
+	}
+	if errEv == nil || errEv.Err == nil {
+		t.Fatal("expected EventError with non-nil Err")
+	}
+	if !errors.Is(errEv.Err, llm.ErrContentFiltered) {
+		t.Errorf("err = %v, want errors.Is(ErrContentFiltered)", errEv.Err)
+	}
+	if errors.Is(errEv.Err, llm.ErrServerError) {
+		t.Errorf("err should NOT match ErrServerError when content-filtered")
+	}
+	if endEv == nil {
+		t.Fatal("missing EventEnd")
+	}
+	if endEv.FinishReason != "content_filter" {
+		t.Errorf("EventEnd.FinishReason = %q, want %q", endEv.FinishReason, "content_filter")
+	}
+}
+
+func TestStream_ContentFilterErrorEnvelope(t *testing.T) {
+	t.Parallel()
+	body := loadFixture(t, "content_filter_error_envelope.sse")
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(body)
+	}))
+	defer srv.Close()
+	c := newTestClient(t, srv)
+
+	ch, err := c.Stream(context.Background(), llm.Request{Model: "google/gemini-3.1-flash-image-preview"})
+	if err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	events := drain(t, ch, 2*time.Second)
+
+	var errEv *llm.Event
+	var endEv *llm.Event
+	for i, ev := range events {
+		switch ev.Kind {
+		case llm.EventError:
+			errEv = &events[i]
+		case llm.EventEnd:
+			endEv = &events[i]
+		}
+	}
+	if errEv == nil || errEv.Err == nil {
+		t.Fatal("expected EventError with non-nil Err")
+	}
+	if !errors.Is(errEv.Err, llm.ErrContentFiltered) {
+		t.Errorf("err = %v, want errors.Is(ErrContentFiltered)", errEv.Err)
+	}
+	if endEv == nil || endEv.FinishReason != "content_filter" {
+		t.Errorf("EventEnd.FinishReason = %q, want %q", endEvFinishReason(endEv), "content_filter")
+	}
+}
+
+func endEvFinishReason(ev *llm.Event) string {
+	if ev == nil {
+		return "<nil EventEnd>"
+	}
+	return ev.FinishReason
+}
+
 func TestStream_429ThenSuccess(t *testing.T) {
 	t.Parallel()
 	successBody := loadFixture(t, "success_after_429.sse")
