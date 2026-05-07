@@ -530,7 +530,7 @@ func TestStream_RequestBody(t *testing.T) {
 	}
 	temp := float32(0.7)
 	ch, err := c.Stream(context.Background(), llm.Request{
-		Model:       "anthropic/claude-sonnet-4.6", // dot — must normalize to hyphen
+		Model:       "anthropic/claude-sonnet-4.6", // pass through — caller chooses canonical form
 		MaxTokens:   1024,
 		Temperature: &temp,
 		Messages: []llm.Message{
@@ -546,8 +546,8 @@ func TestStream_RequestBody(t *testing.T) {
 	if captured == nil {
 		t.Fatal("no request body captured")
 	}
-	if got := captured["model"]; got != "anthropic/claude-sonnet-4-6" {
-		t.Errorf("model = %v, want hyphenated", got)
+	if got := captured["model"]; got != "anthropic/claude-sonnet-4.6" {
+		t.Errorf("model = %v, want %q (verbatim — no normalization)", got, "anthropic/claude-sonnet-4.6")
 	}
 	if captured["stream"] != true {
 		t.Errorf("stream = %v, want true", captured["stream"])

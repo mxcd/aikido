@@ -15,8 +15,9 @@ DeepThought patterns live at `~/Nextcloud/DeepThought/Patterns/` (and `Reference
 | `SSE-Agent-Stream-Protocol-Pattern` | `agent/event.go` — events as `<-chan agent.Event` (Go-channel form, not HTTP SSE) | Same event vocabulary (text, thinking, tool_call, tool_result, usage, end). HTTP SSE wrapper is v3. |
 | `Agent-Tool-Sandbox-Pattern` | `agent/tools_builtin.go` + `agent/RegisterVFSTools` + `vfs.ValidatePath` | No bash, no fetch, no filesystem. Hidden-path filter for `_*` defaults to on. Path validation lives in `vfs/path.go` (structural invariants); caller policy filters live in `agent.VFSToolOptions`. |
 | `Anthropic-Prompt-Caching-Cost-Control` | `llm.Message.Cache *CacheBreakpoint` with `CacheTTL` enum → `cache_control: ephemeral` passthrough | OpenRouter forwards to Anthropic-routed models; non-Anthropic providers silently no-op. v2's `llm/anthropic` adds direct-provider fidelity. |
-| `OpenRouter-Model-ID-Hyphen-Normalization-Gotcha` | `llm/openrouter/modelid.go` — `normalizeModelID` | Lift verbatim. `dots → hyphens` at request time. |
 | `VFS-Postgres-Schema-Pattern` | User-supplied `Storage` impl in v1 (Ent-based) | Pattern documents the schema users should adopt; aikido does not ship a Postgres impl in v1 (ADR-008). |
+
+> **Removed in v0.2.1:** the `OpenRouter-Model-ID-Hyphen-Normalization` helper. OpenRouter's catalog uses both forms across models and only the dotted form for newer entries (e.g. `google/gemini-2.5-flash-image-preview`). Blanket dot→dash conversion broke those. Callers now pass model IDs verbatim.
 
 ## Referenced for tone and style
 

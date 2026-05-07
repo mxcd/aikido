@@ -149,7 +149,7 @@ func (c *Client) buildBody(req llm.Request) ([]byte, error) {
 		return nil, err
 	}
 	cr := chatRequest{
-		Model:       normalizeModelID(req.Model),
+		Model:       req.Model,
 		Messages:    msgs,
 		Tools:       buildAPITools(req.Tools),
 		Stream:      true,

@@ -409,8 +409,23 @@ For multi-replica deployments, the implementing application provides the backend
 
 **Decision.** v1 ships **no** model catalog. `llm.Catalog`, `llm.FindModel`, `llm.Model`, `llm.ErrUnknownModel`, the `llm/catalog.go` deliverable, and the seed-pricing table are all dropped. Callers using `Model` strings as literals from provider docs already had what they needed; the catalog wrapper added rot risk without capability.
 
-The dot-to-hyphen `normalizeModelID` helper stays — it lives in `llm/openrouter/modelid.go`, used by the OpenRouter client itself, not by any catalog.
+The dot-to-hyphen `normalizeModelID` helper was kept in v0.1/v0.2 but **removed in v0.2.1** — see ADR-026 below.
 
 **Token consumption + cost tracking is a tracked future requirement** owned by v1.x or v2. The natural home is per-provider: each direct provider package ships its internal pricing table for cost computation. v1's single provider is OpenRouter, which returns `usage.cost` natively in every response — `llm.Usage.CostUSD` carries it through. Production callers wanting cost dashboards in v1 read it directly from `Usage`. v2's `llm/anthropic` and `llm/openai` packages will compute cost per-call from per-provider catalogs.
 
 **Consequences.** `W1` deliverable list shrinks (no `llm/catalog.go`, no seed table, no `FindModel` helpers). `v1/API.md`'s `llm` package section drops the catalog block. INDEX.md Q23 (catalog seed pricing drift) becomes moot. PATTERNS.md gains a "bring your own catalog" recipe section if/when callers demonstrate they need one.
+
+---
+
+## ADR-026 — Drop blanket dot→hyphen model-ID normalization
+
+**Date:** 07.05.2026
+**Status:** Accepted (v0.2.1)
+
+**Context.** v0.1 / v0.2 shipped `llm/openrouter/modelid.go` with `normalizeModelID(id string) string` that did `strings.ReplaceAll(id, ".", "-")` on every outbound request. The intent (per ADR-025 and the matching pattern note) was to absorb a perceived OpenRouter quirk where catalog model IDs were hyphenated even when human/marketing names used dots (e.g. `claude-sonnet-4.6` → `claude-sonnet-4-6`).
+
+In practice OpenRouter's catalog is **not** uniformly hyphenated. Newer image-capable models like `google/gemini-2.5-flash-image-preview` are rejected with `400 "is not a valid model ID"` when sent in the dashed form `google/gemini-2-5-flash-image-preview`. Older models with `2.0` accepted both forms, so the gotcha looked stable until 2.5+ landed. The blanket conversion silently broke any caller that picked a newer model.
+
+**Decision.** Drop `normalizeModelID` entirely (v0.2.1). The OpenRouter client now sends `req.Model` verbatim. `llm/openrouter/modelid.go` and its test are deleted. The PATTERNS.md entry is removed. Callers pass the canonical OpenRouter model ID — exactly the string from OpenRouter's catalog page — and we don't second-guess it.
+
+**Consequences.** Callers that relied on the dot form being silently converted will get a 400 from OpenRouter on first request — clear, immediate, fixable in the caller. The downstream hub project (asolabs/hub) had to update its `AISettings.PostImage.Model` default to the catalog-canonical `google/gemini-2.5-flash-image-preview`. No other callers exist; this is a non-breaking-in-practice change for the only known consumer. Future provider quirks should be solved per-model in a documented helper rather than a blanket transformation.
