@@ -429,3 +429,18 @@ In practice OpenRouter's catalog is **not** uniformly hyphenated. Newer image-ca
 **Decision.** Drop `normalizeModelID` entirely (v0.2.1). The OpenRouter client now sends `req.Model` verbatim. `llm/openrouter/modelid.go` and its test are deleted. The PATTERNS.md entry is removed. Callers pass the canonical OpenRouter model ID — exactly the string from OpenRouter's catalog page — and we don't second-guess it.
 
 **Consequences.** Callers that relied on the dot form being silently converted will get a 400 from OpenRouter on first request — clear, immediate, fixable in the caller. The downstream hub project (asolabs/hub) had to update its `AISettings.PostImage.Model` default to the catalog-canonical `google/gemini-2.5-flash-image-preview`. No other callers exist; this is a non-breaking-in-practice change for the only known consumer. Future provider quirks should be solved per-model in a documented helper rather than a blanket transformation.
+
+---
+
+## ADR-027 — Promote retry to a public package + add llm.CollectWithRetry
+
+**Date:** 07.05.2026
+**Status:** Accepted (v0.2.2)
+
+**Context.** ADR-022 made `retry` deliberately internal — the retry surface was an implementation detail of `llm/openrouter` for stream-start failures. Mid-stream failures (e.g. SSE RST during image generation against preview models) are not retried at the library level: once `Stream` returns a channel and SSE bytes start flowing, a transport drop surfaces as `EventError{Err: ErrServerError}` and the channel closes. Callers that want to recover have to call `Stream` (or `Collect`) again themselves — but they had no shared retry policy to lean on, since `retry` was internal.
+
+Real-world traces from `asolabs/hub` show ~20% per-attempt failure rate on `google/gemini-3.1-flash-image-preview` due to upstream Google flake. End-user-facing image generation requires a retry policy.
+
+**Decision.** Promote `internal/retry` → `retry`. The package surface (`Policy`, `Do`, `RetryAfterError`, `DefaultPolicy`) is unchanged. Add `llm.CollectWithRetry(ctx, client, req, retry.Policy)` and `llm.IsTransientServerError(err)` to give callers a one-line retry wrapper around `llm.Collect`. Add `llm.DefaultStreamingRetryPolicy()` returning a 5-attempt 2s-base 30s-cap policy tuned for image-gen preview models. The OpenRouter client's existing internal use of `retry.Do` continues unchanged — same package, just at the public path.
+
+**Consequences.** Callers wrapping streaming operations get the same retry primitives provider clients already use. The retry surface is now part of the v1 API and follows the v1 stability promise (additive changes only until v2). Cost note: failures still bill for partial tokens emitted before the abort; tune `MaxAttempts` with that in mind. Per-model retry policies (e.g., disable retry for non-preview models that are reliable) remain a caller-side concern.

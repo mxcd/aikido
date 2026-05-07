@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/mxcd/aikido/internal/retry"
 	"github.com/mxcd/aikido/llm"
+	"github.com/mxcd/aikido/retry"
 )
 
 // retryPolicy returns the policy used to wrap stream-start. It only retries

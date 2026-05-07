@@ -12,7 +12,7 @@ import (
 	"io"
 	"net/http"
 
-	"github.com/mxcd/aikido/internal/retry"
+	"github.com/mxcd/aikido/retry"
 	"github.com/mxcd/aikido/llm"
 )
 

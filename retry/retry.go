@@ -1,8 +1,11 @@
-// Package retry is an internal exponential-backoff helper used by provider
-// clients (currently llm/openrouter) at stream-start. It is intentionally
-// internal — see ADR-022. The shape is small on purpose: a single Do function
-// driven by a Policy struct, with a RetryAfterError escape hatch for honoring
-// HTTP 429 Retry-After headers.
+// Package retry is an exponential-backoff helper used internally by provider
+// clients (e.g. llm/openrouter) and exposed publicly so callers can wrap
+// higher-level operations (e.g. llm.CollectWithRetry) with the same policy
+// shape. See ADR-027 for the promotion from internal to public.
+//
+// The shape is small on purpose: a single Do function driven by a Policy
+// struct, with a RetryAfterError escape hatch for honoring HTTP 429
+// Retry-After headers.
 package retry
 
 import (
