@@ -88,7 +88,7 @@ func NewClient(opts *Options) (*Client, error) {
 // per the policy returned by retryPolicy(). Mid-stream errors do NOT retry —
 // they propagate as EventError.
 func (c *Client) Stream(ctx context.Context, req llm.Request) (<-chan llm.Event, error) {
-	body, err := c.buildBody(req)
+	body, err := c.buildBody(req, true)
 	if err != nil {
 		return nil, fmt.Errorf("openrouter: build request: %w", err)
 	}
@@ -143,7 +143,10 @@ func (c *Client) setHeaders(req *http.Request) {
 }
 
 // buildBody assembles the chat-completions JSON body from llm.Request.
-func (c *Client) buildBody(req llm.Request) ([]byte, error) {
+// stream selects SSE-streaming (true) or single-shot JSON (false). With
+// stream=false the wire field is omitted via omitempty, which OpenRouter
+// treats as non-streaming — that's the contract Complete relies on.
+func (c *Client) buildBody(req llm.Request, stream bool) ([]byte, error) {
 	msgs, err := buildAPIMessages(req.Messages)
 	if err != nil {
 		return nil, err
@@ -152,7 +155,7 @@ func (c *Client) buildBody(req llm.Request) ([]byte, error) {
 		Model:       req.Model,
 		Messages:    msgs,
 		Tools:       buildAPITools(req.Tools),
-		Stream:      true,
+		Stream:      stream,
 		MaxTokens:   req.MaxTokens,
 		Temperature: req.Temperature,
 		Stop:        req.StopSequences,

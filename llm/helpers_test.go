@@ -24,6 +24,34 @@ func (c *chanClient) Stream(ctx context.Context, req Request) (<-chan Event, err
 	return ch, nil
 }
 
+func (c *chanClient) Complete(ctx context.Context, req Request) (Response, error) {
+	if c.err != nil {
+		return Response{}, c.err
+	}
+	var resp Response
+	for _, ev := range c.events {
+		switch ev.Kind {
+		case EventTextDelta:
+			resp.Text += ev.Text
+		case EventToolCall:
+			if ev.Tool != nil {
+				resp.ToolCalls = append(resp.ToolCalls, *ev.Tool)
+			}
+		case EventImage:
+			if ev.Image != nil {
+				resp.Images = append(resp.Images, *ev.Image)
+			}
+		case EventUsage:
+			resp.Usage = ev.Usage
+		case EventError:
+			return resp, ev.Err
+		case EventEnd:
+			resp.FinishReason = ev.FinishReason
+		}
+	}
+	return resp, nil
+}
+
 func TestCollect_HappyPath(t *testing.T) {
 	cc := &chanClient{events: []Event{
 		{Kind: EventTextDelta, Text: "Hello, "},
@@ -132,6 +160,11 @@ type fakeClient struct{ ch chan Event }
 
 func (f *fakeClient) Stream(ctx context.Context, req Request) (<-chan Event, error) {
 	return f.ch, nil
+}
+
+func (f *fakeClient) Complete(ctx context.Context, req Request) (Response, error) {
+	<-ctx.Done()
+	return Response{}, ctx.Err()
 }
 
 func TestFloat32(t *testing.T) {

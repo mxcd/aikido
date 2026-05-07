@@ -542,6 +542,15 @@ func TestRun_LocalLocker_DifferentIDsRunInParallel(t *testing.T) {
 // delayClient sends one EventTextDelta after `delay`, then ends.
 type delayClient struct{ delay time.Duration }
 
+func (d *delayClient) Complete(ctx context.Context, _ llm.Request) (llm.Response, error) {
+	select {
+	case <-ctx.Done():
+		return llm.Response{}, ctx.Err()
+	case <-time.After(d.delay):
+	}
+	return llm.Response{Text: "x"}, nil
+}
+
 func (d *delayClient) Stream(ctx context.Context, _ llm.Request) (<-chan llm.Event, error) {
 	ch := make(chan llm.Event, 2)
 	go func() {

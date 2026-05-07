@@ -115,11 +115,20 @@ func (blockingClient) Stream(ctx context.Context, _ llm.Request) (<-chan llm.Eve
 	return ch, nil
 }
 
+func (blockingClient) Complete(ctx context.Context, _ llm.Request) (llm.Response, error) {
+	<-ctx.Done()
+	return llm.Response{}, ctx.Err()
+}
+
 // errOnDial returns Stream's error before any goroutine starts.
 type dialErrClient struct{ err error }
 
 func (d dialErrClient) Stream(_ context.Context, _ llm.Request) (<-chan llm.Event, error) {
 	return nil, d.err
+}
+
+func (d dialErrClient) Complete(_ context.Context, _ llm.Request) (llm.Response, error) {
+	return llm.Response{}, d.err
 }
 
 // import needed by helpers above

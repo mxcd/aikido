@@ -96,6 +96,29 @@ func CollectWithRetry(ctx context.Context, c Client, req Request, policy retry.P
 	return text, calls, images, usage, retryErr
 }
 
+// CompleteWithRetry wraps Client.Complete with retry.Do using the supplied
+// policy. Each attempt sends a fresh non-streaming request; the final Response
+// is from the last attempt.
+//
+// Use this for image generation: a single oversized base64 payload exceeds the
+// SSE scanner cap and trips ErrServerError on every Stream attempt. Complete
+// reads the body as one JSON document and avoids the cap entirely; the retry
+// wrapper is here for the standard 429/5xx-at-request-start flake.
+//
+// If policy.ShouldRetry is nil, IsTransientServerError is used.
+func CompleteWithRetry(ctx context.Context, c Client, req Request, policy retry.Policy) (Response, error) {
+	if policy.ShouldRetry == nil {
+		policy.ShouldRetry = IsTransientServerError
+	}
+	var resp Response
+	retryErr := retry.Do(ctx, policy, func(_ int) error {
+		var err error
+		resp, err = c.Complete(ctx, req)
+		return err
+	})
+	return resp, retryErr
+}
+
 // Collect drains a stream into a final result. Useful for non-streaming callers.
 //
 // Returns text accumulated from EventTextDelta, all complete tool calls, all

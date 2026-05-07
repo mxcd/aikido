@@ -82,3 +82,50 @@ func (s *StubClient) Stream(ctx context.Context, req llm.Request) (<-chan llm.Ev
 	}()
 	return ch, nil
 }
+
+// Complete consumes one TurnScript and folds its events into a Response.
+// EventError short-circuits with that error (matching live-client semantics).
+// Useful for testing non-streaming callers without a separate scripting type:
+// the same TurnScript drives both Stream and Complete.
+func (s *StubClient) Complete(ctx context.Context, req llm.Request) (llm.Response, error) {
+	s.mu.Lock()
+	if s.cursor >= len(s.turns) {
+		s.mu.Unlock()
+		return llm.Response{}, ErrStubExhausted
+	}
+	turn := s.turns[s.cursor]
+	s.cursor++
+	s.requests = append(s.requests, req)
+	s.mu.Unlock()
+
+	if turn.Block != nil {
+		select {
+		case <-ctx.Done():
+			return llm.Response{}, ctx.Err()
+		case <-turn.Block:
+		}
+	}
+
+	var resp llm.Response
+	for _, ev := range turn.Events {
+		switch ev.Kind {
+		case llm.EventTextDelta:
+			resp.Text += ev.Text
+		case llm.EventToolCall:
+			if ev.Tool != nil {
+				resp.ToolCalls = append(resp.ToolCalls, *ev.Tool)
+			}
+		case llm.EventImage:
+			if ev.Image != nil {
+				resp.Images = append(resp.Images, *ev.Image)
+			}
+		case llm.EventUsage:
+			resp.Usage = ev.Usage
+		case llm.EventError:
+			return resp, ev.Err
+		case llm.EventEnd:
+			resp.FinishReason = ev.FinishReason
+		}
+	}
+	return resp, nil
+}

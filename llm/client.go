@@ -42,6 +42,36 @@ type Event struct {
 	FinishReason string
 }
 
+// Response is the fully-assembled result of a non-streaming completion.
+//
+// Returned by Client.Complete in one shot — no event channel, no SSE framing.
+// Use this for image generation and any other workload where progressive token
+// delivery has no UX value: the SSE path imposes a per-line buffer cap that
+// can't accommodate the multi-MB single-chunk responses image-capable models
+// emit.
+//
+// FinishReason mirrors the provider's reported value ("stop", "tool_calls",
+// "length", "content_filter", ...) — empty when the provider didn't surface one.
+type Response struct {
+	Text         string
+	ToolCalls    []ToolCall
+	Images       []ImagePart
+	Usage        *Usage
+	FinishReason string
+}
+
 type Client interface {
 	Stream(ctx context.Context, req Request) (<-chan Event, error)
+
+	// Complete sends a non-streaming completion request and returns the full
+	// response in one shot. Implementations should map provider errors onto the
+	// same Err* sentinels Stream uses (ErrAuth, ErrRateLimited, ErrServerError,
+	// ErrInvalidRequest, ErrContentFiltered).
+	//
+	// Complete is the right choice for image generation: image-capable models
+	// emit the entire base64 payload in a single chunk that frequently exceeds
+	// the SSE per-line scanner cap, deterministically failing Stream-based
+	// callers. Complete reads the response as a single JSON body and is
+	// immune to that failure mode.
+	Complete(ctx context.Context, req Request) (Response, error)
 }
