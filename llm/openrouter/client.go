@@ -12,8 +12,8 @@ import (
 	"io"
 	"net/http"
 
-	"github.com/mxcd/aikido/retry"
 	"github.com/mxcd/aikido/llm"
+	"github.com/mxcd/aikido/retry"
 )
 
 // DefaultBaseURL is OpenRouter's API root.
@@ -159,6 +159,13 @@ func (c *Client) buildBody(req llm.Request, stream bool) ([]byte, error) {
 		MaxTokens:   req.MaxTokens,
 		Temperature: req.Temperature,
 		Stop:        req.StopSequences,
+		Modalities:  req.Modalities,
+	}
+	if ic := req.ImageConfig; ic != nil && (ic.AspectRatio != "" || ic.ImageSize != "") {
+		cr.ImageConfig = &apiImageConfig{
+			AspectRatio: ic.AspectRatio,
+			ImageSize:   ic.ImageSize,
+		}
 	}
 	if eff := effortFromConfig(req.Thinking); eff != "" {
 		cr.Reasoning = &apiReasoning{Effort: eff}

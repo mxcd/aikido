@@ -388,6 +388,44 @@ func TestComplete_RequestBodyHasStreamFalse(t *testing.T) {
 	}
 }
 
+func TestComplete_ImageConfigOnWire(t *testing.T) {
+	t.Parallel()
+	var captured []byte
+	handler := func(w http.ResponseWriter, r *http.Request) {
+		captured, _ = io.ReadAll(r.Body)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"id":"x","choices":[{"index":0,"message":{"role":"assistant","content":"ok"}}]}`))
+	}
+	srv := httptest.NewServer(http.HandlerFunc(handler))
+	defer srv.Close()
+	c := newTestClient(t, srv)
+
+	if _, err := c.Complete(context.Background(), llm.Request{
+		Model:       "any",
+		Messages:    []llm.Message{{Role: llm.RoleUser, Content: "hi"}},
+		Modalities:  []string{"image", "text"},
+		ImageConfig: &llm.ImageConfig{AspectRatio: "16:9", ImageSize: "2K"},
+	}); err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+	if !bytes.Contains(captured, []byte(`"image_config":{"aspect_ratio":"16:9","image_size":"2K"}`)) {
+		t.Errorf("image_config not on wire. body=%s", captured)
+	}
+
+	// Nil ImageConfig must omit the field entirely.
+	captured = nil
+	if _, err := c.Complete(context.Background(), llm.Request{
+		Model:    "any",
+		Messages: []llm.Message{{Role: llm.RoleUser, Content: "hi"}},
+	}); err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+	if bytes.Contains(captured, []byte(`image_config`)) {
+		t.Errorf("image_config leaked into body when unset. body=%s", captured)
+	}
+}
+
 func TestComplete_TypedPartsImageInContent(t *testing.T) {
 	t.Parallel()
 	// Some image-capable models emit the image as a typed-parts content array
@@ -472,4 +510,3 @@ func TestComplete_MalformedJSON(t *testing.T) {
 		t.Errorf("err = %v, want ErrServerError wrap", err)
 	}
 }
-

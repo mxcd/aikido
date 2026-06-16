@@ -10,6 +10,36 @@ type Request struct {
 	Temperature   *float32
 	Thinking      *ThinkingConfig
 	StopSequences []string
+
+	// Modalities lists the output modalities the caller wants the model to
+	// emit. For image-capable models, set ["image", "text"] — otherwise the
+	// model defaults to text-only and image generation silently fails or
+	// returns a provider error. Empty leaves the provider default.
+	Modalities []string
+
+	// ImageConfig tunes image-output generation (aspect ratio, resolution).
+	// Honored only by image-capable models. Nil leaves provider defaults
+	// (typically 1:1 / 1K).
+	ImageConfig *ImageConfig
+}
+
+// ImageConfig configures image-output generation. Forwarded as the
+// `image_config` field on the OpenRouter chat-completions request. Non-image
+// models ignore it.
+//
+// AspectRatio values supported across image models: "1:1" (default), "2:3",
+// "3:2", "3:4", "4:3", "4:5", "5:4", "9:16", "16:9", "21:9". The extended
+// ratios "1:4", "4:1", "1:8", "8:1" are honored only by
+// google/gemini-3.1-flash-image-preview.
+//
+// ImageSize values: "1K" (default), "2K", "4K". "0.5K" is honored only by
+// google/gemini-3.1-flash-image-preview.
+//
+// Empty fields are omitted from the wire body, letting the provider default
+// apply per-field.
+type ImageConfig struct {
+	AspectRatio string
+	ImageSize   string
 }
 
 // EventKind identifies the kind of a streaming event.

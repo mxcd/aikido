@@ -55,6 +55,8 @@ func NewApp(factory ClientFactory) *urfavecli.Command {
 		Commands: []*urfavecli.Command{
 			chatCommand(factory),
 			agentCommand(factory),
+			imageCommand(factory),
+			skillCommand(),
 		},
 	}
 }

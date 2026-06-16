@@ -18,7 +18,7 @@ Backed by OpenRouter in v1; designed so v2 can plug in direct providers (Anthrop
   - **`vfs/memory`** — read/write in-process.
   - **`vfs/embedfs`** — wraps any `fs.FS` (`embed.FS`, `fs.Sub`, `fstest.MapFS`); read-only.
 - **`agent`** — `Session` with pluggable `History` and `Locker`, two-tier timeouts (`RunTimeout` + `LLMCallTimeout`), strict error policy, single end-of-turn variadic `History.Append`. Built-in VFS tools: `read_file`, `write_file`, `list_files`, `delete_file`, `search`. Toggle `ReadOnly: true` to expose only read tools.
-- **`cmd/aikido`** — CLI built on `urfave/cli/v3` with `chat` and `agent` subcommands.
+- **`cmd/aikido`** — CLI built on `urfave/cli/v3` with `chat`, `agent`, `image`, and `skill` subcommands.
 
 See [docs/v1/API.md](docs/v1/API.md) for the locked surface.
 
@@ -120,9 +120,25 @@ export OPENROUTER_API_KEY=sk-or-...   # or place it in .env in the cwd
 
 aikido chat "Give me one fun fact about Go."
 aikido agent "Create plan.md with one bullet, then list files."
+aikido image --aspect 16:9 --size 2K "A pixel-art fox in tall grass."
 ```
 
-`aikido --help` for the full flag list. Both subcommands accept `--model`, `--system`, `--max-tokens`, `--temperature`.
+`aikido --help` for the full flag list. `chat` and `agent` accept `--model`, `--system`, `--max-tokens`, `--temperature`.
+
+### Claude Code skill
+
+`aikido` ships a Claude Code skill that teaches an agent to drive this CLI —
+chiefly for high-quality image generation. Install it once:
+
+```bash
+aikido skill install              # user-global → ~/.claude/skills/aikido/SKILL.md
+aikido skill install --scope project   # repo-local → ./.claude/skills/aikido/SKILL.md
+aikido skill install --print      # print the skill to stdout instead of writing
+```
+
+The skill is bundled in the binary (`//go:embed`), so any installed `aikido`
+can deploy it. After installing, Claude triggers it automatically on
+image-generation requests, or you can invoke it explicitly with `/aikido`.
 
 ## Tested
 

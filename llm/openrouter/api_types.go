@@ -12,15 +12,24 @@ import (
 // not appear on the wire. Pointer types are used where zero is a valid
 // user-set value (notably Temperature: 0 for deterministic decoding).
 type chatRequest struct {
-	Model       string        `json:"model"`
-	Messages    []apiMessage  `json:"messages"`
-	Tools       []apiTool     `json:"tools,omitempty"`
-	Stream      bool          `json:"stream,omitempty"`
-	MaxTokens   int           `json:"max_tokens,omitempty"`
-	Temperature *float32      `json:"temperature,omitempty"`
-	Stop        []string      `json:"stop,omitempty"`
-	Reasoning   *apiReasoning `json:"reasoning,omitempty"`
-	Provider    *apiProvider  `json:"provider,omitempty"`
+	Model       string          `json:"model"`
+	Messages    []apiMessage    `json:"messages"`
+	Tools       []apiTool       `json:"tools,omitempty"`
+	Stream      bool            `json:"stream,omitempty"`
+	MaxTokens   int             `json:"max_tokens,omitempty"`
+	Temperature *float32        `json:"temperature,omitempty"`
+	Stop        []string        `json:"stop,omitempty"`
+	Reasoning   *apiReasoning   `json:"reasoning,omitempty"`
+	Provider    *apiProvider    `json:"provider,omitempty"`
+	Modalities  []string        `json:"modalities,omitempty"`
+	ImageConfig *apiImageConfig `json:"image_config,omitempty"`
+}
+
+// apiImageConfig mirrors llm.ImageConfig on the OpenRouter wire. Both fields
+// use omitempty so an unset value leaves the provider default per-field.
+type apiImageConfig struct {
+	AspectRatio string `json:"aspect_ratio,omitempty"`
+	ImageSize   string `json:"image_size,omitempty"`
 }
 
 // apiReasoning is the OpenRouter-normalized thinking-control block.
