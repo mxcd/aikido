@@ -12,17 +12,27 @@ import (
 // not appear on the wire. Pointer types are used where zero is a valid
 // user-set value (notably Temperature: 0 for deterministic decoding).
 type chatRequest struct {
-	Model       string          `json:"model"`
-	Messages    []apiMessage    `json:"messages"`
-	Tools       []apiTool       `json:"tools,omitempty"`
-	Stream      bool            `json:"stream,omitempty"`
-	MaxTokens   int             `json:"max_tokens,omitempty"`
-	Temperature *float32        `json:"temperature,omitempty"`
-	Stop        []string        `json:"stop,omitempty"`
-	Reasoning   *apiReasoning   `json:"reasoning,omitempty"`
-	Provider    *apiProvider    `json:"provider,omitempty"`
-	Modalities  []string        `json:"modalities,omitempty"`
-	ImageConfig *apiImageConfig `json:"image_config,omitempty"`
+	Model       string           `json:"model"`
+	Messages    []apiMessage     `json:"messages"`
+	Tools       []apiTool        `json:"tools,omitempty"`
+	Stream      bool             `json:"stream,omitempty"`
+	MaxTokens   int              `json:"max_tokens,omitempty"`
+	Temperature *float32         `json:"temperature,omitempty"`
+	Stop        []string         `json:"stop,omitempty"`
+	Reasoning   *apiReasoning    `json:"reasoning,omitempty"`
+	Provider    *apiProvider     `json:"provider,omitempty"`
+	Modalities  []string         `json:"modalities,omitempty"`
+	ImageConfig *apiImageConfig  `json:"image_config,omitempty"`
+	Usage       *apiUsageOptions `json:"usage,omitempty"`
+}
+
+// apiUsageOptions is OpenRouter's usage-accounting block. With Include set the
+// provider returns the credit cost of the call in usage.cost, on the
+// non-streaming response and on the final SSE chunk alike. Without it the
+// token counts arrive but cost is always absent, which leaves a caller that
+// meters money with nothing to meter.
+type apiUsageOptions struct {
+	Include bool `json:"include"`
 }
 
 // apiImageConfig mirrors llm.ImageConfig on the OpenRouter wire. Both fields

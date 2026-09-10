@@ -50,7 +50,24 @@ func processStream(ctx context.Context, body io.Reader, out chan<- llm.Event) {
 	// Allow lines up to 1 MiB — provider tool-call payloads can be large.
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 
-	var sawError bool
+	var (
+		sawError  bool
+		usageSent bool
+	)
+	// emitUsage emits the first usage block seen, once. A priced turn is worth
+	// exactly as much after an error as before one, so scanning continues past
+	// an error envelope until [DONE] or EOF to pick up a trailing usage chunk.
+	emitUsage := func(c *streamChunk) {
+		if usageSent || c.Usage == nil {
+			return
+		}
+		u := toLLMUsage(c.Usage)
+		if u == nil {
+			return
+		}
+		emit(ctx, out, llm.Event{Kind: llm.EventUsage, Usage: u})
+		usageSent = true
+	}
 
 	for scanner.Scan() {
 		// Cooperative cancellation check: bail before doing more work.
@@ -87,10 +104,21 @@ func processStream(ctx context.Context, body io.Reader, out chan<- llm.Event) {
 			continue
 		}
 
-		// Top-level error envelope = mid-stream error. Emit and stop.
+		// After an error only the price is still interesting: the provider
+		// bills a filtered or failed turn, and it reports that on a later
+		// chunk. Everything else after the error is dropped.
+		if sawError {
+			emitUsage(&chunk)
+			continue
+		}
+
+		// Top-level error envelope = mid-stream error. Emit and stop reading
+		// content.
 		if chunk.Error != nil {
 			// Flush any buffered tool calls (defensive — usually empty).
 			emitAssembledCalls(ctx, out, asm.flush())
+			// Price first: an error envelope that carries usage was billed.
+			emitUsage(&chunk)
 			msg := chunk.Error.Message
 			if msg == "" {
 				msg = "provider error"
@@ -107,7 +135,7 @@ func processStream(ctx context.Context, body io.Reader, out chan<- llm.Event) {
 				Err:  fmt.Errorf("openrouter mid-stream: %s: %w", msg, cause),
 			})
 			sawError = true
-			break
+			continue
 		}
 
 		// Per-choice processing. Single-choice in practice, but be tolerant.
@@ -155,15 +183,7 @@ func processStream(ctx context.Context, body io.Reader, out chan<- llm.Event) {
 
 		// Usage may arrive on any chunk (typically the final content chunk
 		// or a dedicated trailing chunk with empty `choices`). Emit once seen.
-		if chunk.Usage != nil {
-			if u := toLLMUsage(chunk.Usage); u != nil {
-				emit(ctx, out, llm.Event{Kind: llm.EventUsage, Usage: u})
-			}
-		}
-
-		if sawError {
-			break
-		}
+		emitUsage(&chunk)
 	}
 
 	// Loop fell out of scanner (EOF or [DONE] or error). Handle scanner.Err()

@@ -51,6 +51,9 @@ func parseCompleteResponse(body []byte) (llm.Response, error) {
 	}
 
 	// Top-level error envelope. Map onto ErrServerError or ErrContentFiltered.
+	// The usage block rides along when the provider priced the failed call, and
+	// a priced failure still cost money: return it with the error rather than
+	// dropping it.
 	if chunk.Error != nil {
 		msg := chunk.Error.Message
 		if msg == "" {
@@ -60,7 +63,7 @@ func parseCompleteResponse(body []byte) (llm.Response, error) {
 		if isContentFilterErrorEnvelope(chunk.Error) {
 			cause = llm.ErrContentFiltered
 		}
-		return llm.Response{}, fmt.Errorf("openrouter: %s: %w", msg, cause)
+		return llm.Response{Usage: toLLMUsage(chunk.Usage)}, fmt.Errorf("openrouter: %s: %w", msg, cause)
 	}
 
 	var resp llm.Response

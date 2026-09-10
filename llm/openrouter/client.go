@@ -160,6 +160,10 @@ func (c *Client) buildBody(req llm.Request, stream bool) ([]byte, error) {
 		Temperature: req.Temperature,
 		Stop:        req.StopSequences,
 		Modalities:  req.Modalities,
+		// Always ask for usage accounting: cost is the only exact price the
+		// caller can get, it costs nothing to request, and a caller that does
+		// not want it simply ignores Usage.CostUSD.
+		Usage: &apiUsageOptions{Include: true},
 	}
 	if ic := req.ImageConfig; ic != nil && (ic.AspectRatio != "" || ic.ImageSize != "") {
 		cr.ImageConfig = &apiImageConfig{

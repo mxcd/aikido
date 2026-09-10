@@ -531,3 +531,35 @@ covered here: pixel-exact `size` (`WxH`), reference-image downscaling, catalog
 auto-detection via `GET /models?output_modalities=image`, and streaming for
 images. `postJSON` has no read cap and retries 5xx and read failures exactly
 as `Complete` did before, so a large body still costs what it costs.
+
+## ADR-030 - Always request OpenRouter usage accounting, and never drop a price
+
+**Context.** ADR-025 leaves token and cost tracking to the caller, and
+`llm.Usage.CostUSD` has existed since then - but it was always zero. OpenRouter
+only returns `usage.cost` when the request body asks for it with
+`"usage": {"include": true}`, and aikido never sent that block. A caller that
+wants to meter money therefore had to price calls itself from a model price
+table it has to keep in sync, which is exactly the catalog ADR-025 says the
+library will not own. The provider knows the price; it just was not asked.
+
+Two further holes threw away a price that did arrive. `Complete` returned an
+empty `llm.Response` when the body carried a top-level error envelope, and the
+SSE scanner stopped reading on the error envelope or a `content_filter` finish
+reason. A filtered or failed turn is still billed, and OpenRouter reports that
+price on the aborting chunk or on the one after it.
+
+**Decision.** `buildBody` sets `usage.include` on every chat-completions
+request, streaming and non-streaming alike. `parseCompleteResponse` returns the
+mapped usage together with the error envelope. `processStream` emits the usage
+of an error-envelope chunk before the `EventError`, and keeps scanning past an
+error until `[DONE]` or EOF so a trailing usage chunk is still emitted, once,
+before the closing `EventEnd`.
+
+**Consequences.** Every OpenRouter response now carries a cost, so a caller can
+account exactly instead of estimating. The request body grows by one object;
+there is no rate or quota cost to asking. Usage is emitted at most once per
+stream, so a provider that switched to cumulative snapshots would be visible as
+a missing second event rather than as double counting. An abort no longer
+truncates the read, which means the scanner may consume a few more chunks after
+an error; it is bounded by `[DONE]`, EOF, the per-line cap and the caller's
+context, as before.

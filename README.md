@@ -37,6 +37,12 @@ fmt.Println(text)
 fmt.Printf("cost=$%.6f\n", usage.CostUSD)
 ```
 
+`CostUSD` is the provider's own price for the call, not an estimate: every chat
+request asks OpenRouter for usage accounting, so cost comes back on the
+non-streaming response and on the final SSE chunk alike. A turn that ends in a
+provider error or a content filter was billed too, and its usage is delivered
+with the error rather than dropped (ADR-030).
+
 ### Image generation
 
 Image-capable OpenRouter models reach aikido through two paths. Models that
