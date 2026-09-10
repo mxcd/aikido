@@ -81,7 +81,7 @@ Functionality is correct and verified live on both paths; all planned tests exis
 of compliance) plus a README code sample that does not compile. Both, and the three other MINORs,
 fit one small follow-up commit, after which this becomes an APPROVE and Riker can cut `v0.2.7`.
 
-VERDICT: REJECT
+Round 1 verdict: REJECT (superseded by round 2 below).
 
 
 ## Round 1 resolution (implementer, 10.09.2026)
@@ -97,3 +97,30 @@ Two notes for the next round:
   files, which is exactly where both offenders lived when the implementer checked.
 - README snippets are now compile-checked against the branch in a scratch module. That should
   probably be the standing habit for any Go snippet a doc gains.
+
+## Round 2 (10.09.2026, reviewer, fix commit `a39f654`)
+
+Every round-1 resolution verified against the code, not the description. Constraint from Riker
+honored: no tag, no push of `main`, no `just install`; only this file is committed, on the task
+branch.
+
+| Round-1 finding | Verified | Evidence |
+|---|---|---|
+| Em dashes in `images.go` | fixed | `git diff 2748fd3...HEAD` has 0 added lines containing U+2014. The eight touched files that still contain one (`README.md`, `DECISIONS.md`, `API.md`, `SKILL.md`, `api_types.go`, `client.go`, `complete.go`, `complete_test.go`) carry it only on pre-existing lines, out of scope for this task. |
+| README `GenerateImage` snippet | fixed | Concrete `*openrouter.Client` calls `GenerateImage` directly; the assertion moved into a function taking `llm.Client`. Both snippets type-check as written. |
+| `--ref` unbounded read | fixed | `readReferenceFile`: `os.Open`, `Stat`, reject non-regular, reject `Size() > remaining`, `io.LimitReader(f, limit+1)` recheck. Budget threaded as `remaining` across references. New cases: directory, budget across two files, `/dev/zero` under a 5 s deadline. CLI check: `--ref /dev/zero` returns `reference /dev/zero is not a regular file` immediately. |
+| `images.go:28` comment overclaim | fixed | Comment now states 200-envelope content filter via `isContentFilterErrorEnvelope`, non-200 by status with no content-filter case. Matches `classifyHTTPError`. |
+| `complete_test.go` closure ordering | fixed | `firstClosedAtRetry` snapshotted inside `respond` at attempt two; assertion reads the snapshot. |
+| Release before review | acknowledged | Riker owns the gate; next release is Riker's `v0.3.0` after this approval. |
+
+Gates, round 2: `just check` pass (0 lint issues), `go test -race -count=1 ./...` 11 packages ok,
+`go build ./examples/...` and `go vet -tags=smoke ./internal/cli/` pass. Live: flare with
+`--ref` (8x8 red PNG), `--quality low`, `--aspect 1:1` produced a 1024x1024 PNG at 0.006 USD, so
+the rewritten loader works end to end.
+
+Agree with the implementer's two notes: the em dash gate is a tree grep over the branch's files,
+and doc Go snippets get compiled before commit.
+
+No new findings.
+
+VERDICT: APPROVE
