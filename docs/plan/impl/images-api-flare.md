@@ -247,3 +247,36 @@ still works through chat completions. The two smoke subtests are these two comma
 - [ ] Default is flare in code, `--help` (tested), README, SKILL.md; env and `-m` still override; chat-path tests pass explicit Gemini.
 - [ ] Stub client implements `ImageGenerator`; CLI errors cleanly when the client does not; every test in §7 exists and passes; smoke is tag plus env gated, env-isolated, asserts full endpoint path, model and a decodable image.
 - [ ] ADR-029, API.md sync, README example fix and SKILL.md 404 rewrite present; no em dashes anywhere in the diff.
+
+---
+
+## Implementation notes (10.09.2026)
+
+Built on `task/images-api-flare`, rebased onto `feat/images-api-flare` so the plan
+travels with the code. Deviations from the plan above, all minor:
+
+1. **`postJSON` lives in `client.go`.** §6 named "client.go and complete.go"; the
+   helper is shared HTTP infrastructure, so it sits beside `setHeaders` and
+   `buildBody` rather than in the chat-completions file. `complete.go` keeps
+   `Complete` and `parseCompleteResponse` only.
+2. **One extra openrouter test.** §7 folded "optional fields absent when unset"
+   into `TestGenerateImage_RequestOnWire`; it is its own test,
+   `TestGenerateImage_OmitsUnsetFields`, because the two need different requests.
+3. **ADR-029's heading uses `-`, not the em dash** every other ADR heading uses.
+   The review checklist bans em dashes anywhere in the diff, and that ban wins
+   over matching the file's legacy heading style.
+4. **The stub does not record an exhausted call.** §6 said `GenerateImage`
+   "records the request"; it records only calls that consume a script, matching
+   `Stream`, so `ImageRequests()` never reports a call the stub refused.
+5. **`internal/cli.Version` still reads `v0.1.0-dev`.** It has been stale since
+   v0.2.0 and §2 lists a version bump as a non-goal, so the release tag moves
+   without it. Worth a separate fix.
+
+Live acceptance (10.09.2026, about 0.09 USD total, key via the sanctioned
+`CLAUDE_OPENROUTER_API_KEY`; `riker-env aso/openrouter` is not readable from a
+`private/` task token):
+
+- default model, no flags: 1254x1254 PNG through `/api/v1/images`, cost 0.006925 USD.
+- `-m google/gemini-3.1-flash-image-preview`: 1408x768 JPEG through chat completions, cost 0.068220 USD.
+- `--ref <png> --quality low --aspect 1:1`: the red cube came back blue with the
+  composition intact, prompt tokens 1546, so the reference really rode along.
