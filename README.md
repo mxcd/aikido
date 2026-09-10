@@ -70,17 +70,28 @@ completions and are missing from a plain `GET /models` listing) go through the
 optional `llm.ImageGenerator` capability instead:
 
 ```go
-gen, ok := client.(llm.ImageGenerator)
-if !ok {
-    log.Fatal("client has no images endpoint")
-}
-resp, err := gen.GenerateImage(ctx, llm.ImageRequest{
+// client here is the concrete *openrouter.Client, which implements the
+// capability, so call it directly.
+resp, err := client.GenerateImage(ctx, llm.ImageRequest{
     Model:       "openai/gpt-image-2.5-flare",
     Prompt:      "A pixel-art fox in tall grass.",
     AspectRatio: "16:9",
     ImageSize:   "2K",
     Quality:     "high",
 })
+```
+
+Code holding a plain `llm.Client` type-asserts first, since not every provider
+has such an endpoint:
+
+```go
+func generate(ctx context.Context, c llm.Client, req llm.ImageRequest) (llm.ImageResponse, error) {
+    gen, ok := c.(llm.ImageGenerator)
+    if !ok {
+        return llm.ImageResponse{}, errors.New("client has no images endpoint")
+    }
+    return gen.GenerateImage(ctx, req)
+}
 ```
 
 When streaming the chat path, the same data flows as `llm.EventImage` events.

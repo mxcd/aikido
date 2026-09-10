@@ -17,16 +17,17 @@ var _ llm.ImageGenerator = (*Client)(nil)
 // GenerateImage renders one prompt through OpenRouter's dedicated images
 // endpoint (POST /api/v1/images).
 //
-// Some OpenRouter image models are served only there — openai/gpt-image-2.5-flare
+// Some OpenRouter image models are served only there. openai/gpt-image-2.5-flare
 // and friends never appear on chat completions and are missing from a plain
 // GET /models listing. Models that accept both endpoints (the Gemini image
 // family) should keep using Complete with Modalities: []string{"image", "text"},
 // which is the only path that also carries a conversation.
 //
 // Retry and error classification are Complete's: 429 and 5xx retry per
-// retryPolicy, auth and bad-request short-circuit, and a content-filter
-// rejection surfaces as ErrContentFiltered whether it arrives as a non-200 or
-// as a 200 carrying a top-level error envelope.
+// retryPolicy, auth and bad-request short-circuit. A 200 carrying a top-level
+// error envelope that isContentFilterErrorEnvelope recognises surfaces as
+// ErrContentFiltered; a non-200 is classified by status through
+// classifyHTTPError, which has no content-filter case.
 func (c *Client) GenerateImage(ctx context.Context, req llm.ImageRequest) (llm.ImageResponse, error) {
 	body, err := buildImagesBody(req)
 	if err != nil {
@@ -72,7 +73,7 @@ func buildImagesBody(req llm.ImageRequest) ([]byte, error) {
 //
 // Each datum carries either base64 bytes or a URL. Missing media_type is
 // sniffed from the decoded bytes; a URL datum keeps whatever the provider
-// reported. An empty data array is not an error here — the caller decides
+// reported. An empty data array is not an error here: the caller decides
 // whether zero images is a failure.
 func parseImagesResponse(body []byte) (llm.ImageResponse, error) {
 	var out imagesResponse

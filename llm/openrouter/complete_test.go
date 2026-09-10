@@ -648,10 +648,15 @@ func TestPostJSON_ReadFailureRetriesAndClosesBody(t *testing.T) {
 	t.Parallel()
 	first := &trackedBody{data: []byte(`{"id":"x","choices":[]}`), failAt: 4}
 	second := &trackedBody{data: []byte(`{"id":"x","choices":[{"index":0,"message":{"role":"assistant","content":"ok"}}]}`), failAt: -1}
+	// Snapshotted when attempt two starts, so the assertion is "closed before
+	// the retry" and not merely "closed eventually".
+	var firstClosedAtRetry bool
 	rt := &recordingTransport{respond: func(attempt int) *http.Response {
 		body := io.ReadCloser(second)
 		if attempt == 1 {
 			body = first
+		} else {
+			firstClosedAtRetry = first.closed
 		}
 		return &http.Response{
 			StatusCode: http.StatusOK,
@@ -677,8 +682,8 @@ func TestPostJSON_ReadFailureRetriesAndClosesBody(t *testing.T) {
 	if string(rt.bodies[0]) != string(rt.bodies[1]) {
 		t.Errorf("retry sent a different body:\n%s\n%s", rt.bodies[0], rt.bodies[1])
 	}
-	if !first.closed {
-		t.Error("first response body was not closed before the retry")
+	if !firstClosedAtRetry {
+		t.Error("first response body was still open when attempt two started")
 	}
 	if !second.closed {
 		t.Error("last response body was not closed")

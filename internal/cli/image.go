@@ -286,16 +286,13 @@ func loadReferenceImages(paths []string) ([]llm.ImagePart, error) {
 		return nil, nil
 	}
 	out := make([]llm.ImagePart, 0, len(paths))
-	total := 0
+	remaining := int64(maxReferenceBytes)
 	for _, path := range paths {
-		data, err := os.ReadFile(path)
+		data, err := readReferenceFile(path, remaining)
 		if err != nil {
-			return nil, fmt.Errorf("read reference image %s: %w", path, err)
+			return nil, err
 		}
-		total += len(data)
-		if total > maxReferenceBytes {
-			return nil, fmt.Errorf("reference images exceed %d bytes in total", maxReferenceBytes)
-		}
+		remaining -= int64(len(data))
 		ct := mime.TypeByExtension(filepath.Ext(path))
 		if i := strings.IndexByte(ct, ';'); i >= 0 {
 			ct = strings.TrimSpace(ct[:i])
@@ -312,6 +309,37 @@ func loadReferenceImages(paths []string) ([]llm.ImagePart, error) {
 		})
 	}
 	return out, nil
+}
+
+// readReferenceFile reads at most limit bytes from a regular file. The stat
+// gates the read rather than trailing it: os.ReadFile on /dev/zero never
+// returns, and a mistyped --ref movie.mp4 would otherwise pull gigabytes into
+// memory before the non-image check rejects it. The LimitReader then catches a
+// file that grew between the stat and the read.
+func readReferenceFile(path string, limit int64) ([]byte, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, fmt.Errorf("read reference image %s: %w", path, err)
+	}
+	defer f.Close()
+	info, err := f.Stat()
+	if err != nil {
+		return nil, fmt.Errorf("stat reference image %s: %w", path, err)
+	}
+	if !info.Mode().IsRegular() {
+		return nil, fmt.Errorf("reference %s is not a regular file", path)
+	}
+	if info.Size() > limit {
+		return nil, fmt.Errorf("reference images exceed %d bytes in total", maxReferenceBytes)
+	}
+	data, err := io.ReadAll(io.LimitReader(f, limit+1))
+	if err != nil {
+		return nil, fmt.Errorf("read reference image %s: %w", path, err)
+	}
+	if int64(len(data)) > limit {
+		return nil, fmt.Errorf("reference images exceed %d bytes in total", maxReferenceBytes)
+	}
+	return data, nil
 }
 
 func imageExtFromContentType(ct string) string {

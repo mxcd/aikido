@@ -265,6 +265,11 @@ travels with the code. Deviations from the plan above, all minor:
 3. **ADR-029's heading uses `-`, not the em dash** every other ADR heading uses.
    The review checklist bans em dashes anywhere in the diff, and that ban wins
    over matching the file's legacy heading style.
+   **Correction (review round 1):** this note originally claimed the ban was
+   honored everywhere. It was not: two em dashes sat in `llm/openrouter/images.go`
+   doc comments. The check that missed them grepped `git diff`, which says nothing
+   about untracked files, and that file was untracked at the time. Fixed in round 1;
+   the gate is a tree grep now, not a diff grep.
 4. **The stub does not record an exhausted call.** §6 said `GenerateImage`
    "records the request"; it records only calls that consume a script, matching
    `Stream`, so `ImageRequests()` never reports a call the stub refused.

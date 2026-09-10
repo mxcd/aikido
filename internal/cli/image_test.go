@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/mxcd/aikido/llm"
 	"github.com/mxcd/aikido/llm/llmtest"
@@ -576,6 +577,37 @@ func TestLoadReferenceImages(t *testing.T) {
 	}
 	if _, err := loadReferenceImages([]string{big}); err == nil || !strings.Contains(err.Error(), "exceed") {
 		t.Errorf("err = %v, want a size-budget rejection", err)
+	}
+	// The budget is for all references together, not per file.
+	if _, err := loadReferenceImages([]string{png, big}); err == nil || !strings.Contains(err.Error(), "exceed") {
+		t.Errorf("err = %v, want the budget to span every reference", err)
+	}
+
+	// A directory is not a regular file and must be rejected before any read.
+	if _, err := loadReferenceImages([]string{dir}); err == nil || !strings.Contains(err.Error(), "regular file") {
+		t.Errorf("err = %v, want a non-regular-file rejection", err)
+	}
+}
+
+// TestLoadReferenceImages_RejectsCharacterDeviceBeforeReading pins the reason
+// the size check runs on the stat rather than on the bytes: os.ReadFile on
+// /dev/zero never returns. The stat gate must reject it immediately.
+func TestLoadReferenceImages_RejectsCharacterDeviceBeforeReading(t *testing.T) {
+	if _, err := os.Stat("/dev/zero"); err != nil {
+		t.Skip("/dev/zero is not available")
+	}
+	done := make(chan error, 1)
+	go func() {
+		_, err := loadReferenceImages([]string{"/dev/zero"})
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if err == nil || !strings.Contains(err.Error(), "regular file") {
+			t.Errorf("err = %v, want a non-regular-file rejection", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("loadReferenceImages did not return on /dev/zero within 5s")
 	}
 }
 
