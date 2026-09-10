@@ -1,0 +1,6 @@
+{
+  "error": {
+    "code": "content_filter",
+    "message": "Your prompt was rejected by the safety filter"
+  }
+}

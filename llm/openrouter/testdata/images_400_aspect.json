@@ -1,0 +1,6 @@
+{
+  "error": {
+    "code": 400,
+    "message": "Invalid aspect ratio '4:5' for openai/gpt-image-2.5-flare"
+  }
+}

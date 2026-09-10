@@ -510,3 +510,248 @@ func TestComplete_MalformedJSON(t *testing.T) {
 		t.Errorf("err = %v, want ErrServerError wrap", err)
 	}
 }
+
+func TestComplete_WireContract(t *testing.T) {
+	t.Parallel()
+	var (
+		paths   []string
+		headers []http.Header
+		bodies  [][]byte
+		hits    int32
+	)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		paths = append(paths, r.URL.Path)
+		headers = append(headers, r.Header.Clone())
+		bodies = append(bodies, b)
+		if atomic.AddInt32(&hits, 1) == 1 {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = w.Write([]byte(`{"error":{"message":"upstream down"}}`))
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"x","choices":[{"index":0,"message":{"role":"assistant","content":"ok"}}]}`))
+	}))
+	defer srv.Close()
+
+	c, err := NewClient(&Options{
+		APIKey:      "sk-test",
+		BaseURL:     srv.URL,
+		HTTPReferer: "https://github.com/mxcd/aikido",
+		XTitle:      "aikido CLI",
+	})
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	if _, err := c.Complete(context.Background(), llm.Request{
+		Model:    "any",
+		Messages: []llm.Message{{Role: llm.RoleUser, Content: "hello"}},
+	}); err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+
+	if len(paths) != 2 {
+		t.Fatalf("attempts = %d, want 2", len(paths))
+	}
+	for i, p := range paths {
+		if p != "/chat/completions" {
+			t.Errorf("attempt %d path = %q, want /chat/completions", i, p)
+		}
+	}
+	for i, h := range headers {
+		if got := h.Get("Accept"); got != "application/json" {
+			t.Errorf("attempt %d Accept = %q", i, got)
+		}
+		if got := h.Get("Authorization"); got != "Bearer sk-test" {
+			t.Errorf("attempt %d Authorization = %q", i, got)
+		}
+		if got := h.Get("HTTP-Referer"); got != "https://github.com/mxcd/aikido" {
+			t.Errorf("attempt %d HTTP-Referer = %q", i, got)
+		}
+		if got := h.Get("X-Title"); got != "aikido CLI" {
+			t.Errorf("attempt %d X-Title = %q", i, got)
+		}
+	}
+	if string(bodies[0]) != string(bodies[1]) {
+		t.Errorf("retry sent a different body:\n%s\n%s", bodies[0], bodies[1])
+	}
+}
+
+func TestComplete_ErrorEnvelopeNoRetry(t *testing.T) {
+	t.Parallel()
+	var hits int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&hits, 1)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"error":{"code":"server_error","message":"provider blew up"}}`))
+	}))
+	defer srv.Close()
+	c := newTestClient(t, srv)
+
+	_, err := c.Complete(context.Background(), llm.Request{Model: "any"})
+	if !errors.Is(err, llm.ErrServerError) {
+		t.Fatalf("err = %v, want ErrServerError", err)
+	}
+	if got := atomic.LoadInt32(&hits); got != 1 {
+		t.Errorf("hits = %d, want 1 (a 200 envelope is parsed outside the retry loop)", got)
+	}
+}
+
+// trackedBody fails mid-read when failAt is reached and records its Close.
+type trackedBody struct {
+	data   []byte
+	pos    int
+	failAt int
+	closed bool
+}
+
+func (b *trackedBody) Read(p []byte) (int, error) {
+	if b.failAt >= 0 && b.pos >= b.failAt {
+		return 0, errors.New("connection reset mid-body")
+	}
+	if b.pos >= len(b.data) {
+		return 0, io.EOF
+	}
+	n := copy(p, b.data[b.pos:])
+	if b.failAt >= 0 && b.pos+n > b.failAt {
+		n = b.failAt - b.pos
+	}
+	b.pos += n
+	return n, nil
+}
+
+func (b *trackedBody) Close() error {
+	b.closed = true
+	return nil
+}
+
+// recordingTransport serves canned responses in order and keeps the request
+// bytes so the caller can assert body identity across retries.
+type recordingTransport struct {
+	bodies   [][]byte
+	attempts int
+	respond  func(attempt int) *http.Response
+}
+
+func (rt *recordingTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	b, _ := io.ReadAll(req.Body)
+	rt.bodies = append(rt.bodies, b)
+	rt.attempts++
+	return rt.respond(rt.attempts), nil
+}
+
+// TestPostJSON_ReadFailureRetriesAndClosesBody pins the read-failure branch:
+// a body that dies mid-read is an ErrServerError (so it retries), the retry
+// resends identical bytes, and every response body is closed.
+func TestPostJSON_ReadFailureRetriesAndClosesBody(t *testing.T) {
+	t.Parallel()
+	first := &trackedBody{data: []byte(`{"id":"x","choices":[]}`), failAt: 4}
+	second := &trackedBody{data: []byte(`{"id":"x","choices":[{"index":0,"message":{"role":"assistant","content":"ok"}}]}`), failAt: -1}
+	rt := &recordingTransport{respond: func(attempt int) *http.Response {
+		body := io.ReadCloser(second)
+		if attempt == 1 {
+			body = first
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body:       body,
+		}
+	}}
+	c, err := NewClient(&Options{APIKey: "sk-test", BaseURL: "https://example.invalid/api/v1", HTTPClient: &http.Client{Transport: rt}})
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+
+	resp, err := c.Complete(context.Background(), llm.Request{Model: "any"})
+	if err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+	if resp.Text != "ok" {
+		t.Errorf("text = %q, want ok", resp.Text)
+	}
+	if rt.attempts != 2 {
+		t.Fatalf("attempts = %d, want 2", rt.attempts)
+	}
+	if string(rt.bodies[0]) != string(rt.bodies[1]) {
+		t.Errorf("retry sent a different body:\n%s\n%s", rt.bodies[0], rt.bodies[1])
+	}
+	if !first.closed {
+		t.Error("first response body was not closed before the retry")
+	}
+	if !second.closed {
+		t.Error("last response body was not closed")
+	}
+}
+
+// TestComplete_ChatImageFixture replays a recorded Gemini image response and
+// asserts the chat path still carries modalities, image_config and reference
+// images on the wire.
+func TestComplete_ChatImageFixture(t *testing.T) {
+	t.Parallel()
+	var captured []byte
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		captured, _ = io.ReadAll(r.Body)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write(readFixture(t, "chat_image_gemini_nonstream.json"))
+	}))
+	defer srv.Close()
+	c := newTestClient(t, srv)
+
+	resp, err := c.Complete(context.Background(), llm.Request{
+		Model: "google/gemini-3.1-flash-image-preview",
+		Messages: []llm.Message{{
+			Role:    llm.RoleUser,
+			Content: "a red cube on white",
+			Images:  []llm.ImagePart{{URL: "data:image/jpeg;base64,QUJD", ContentType: "image/jpeg"}},
+		}},
+		Modalities:  []string{"image", "text"},
+		ImageConfig: &llm.ImageConfig{AspectRatio: "16:9", ImageSize: "2K"},
+	})
+	if err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+	if len(resp.Images) != 1 || len(resp.Images[0].Data) == 0 {
+		t.Fatalf("images = %+v, want one inline image", resp.Images)
+	}
+	if !isPNG(resp.Images[0].Data) {
+		t.Errorf("decoded bytes are not a PNG: %x", resp.Images[0].Data[:8])
+	}
+	if resp.Text != "Here is the image." {
+		t.Errorf("text = %q", resp.Text)
+	}
+
+	var body struct {
+		Modalities  []string `json:"modalities"`
+		ImageConfig *struct {
+			AspectRatio string `json:"aspect_ratio"`
+			ImageSize   string `json:"image_size"`
+		} `json:"image_config"`
+		Messages []struct {
+			Content []struct {
+				Type     string `json:"type"`
+				Text     string `json:"text"`
+				ImageURL *struct {
+					URL string `json:"url"`
+				} `json:"image_url"`
+			} `json:"content"`
+		} `json:"messages"`
+	}
+	if err := json.Unmarshal(captured, &body); err != nil {
+		t.Fatalf("decode request: %v (%s)", err, captured)
+	}
+	if len(body.Modalities) != 2 || body.Modalities[0] != "image" {
+		t.Errorf("modalities = %v", body.Modalities)
+	}
+	if body.ImageConfig == nil || body.ImageConfig.AspectRatio != "16:9" || body.ImageConfig.ImageSize != "2K" {
+		t.Errorf("image_config = %+v", body.ImageConfig)
+	}
+	if len(body.Messages) != 1 {
+		t.Fatalf("messages = %d, want 1", len(body.Messages))
+	}
+	parts := body.Messages[0].Content
+	if len(parts) != 2 || parts[1].ImageURL == nil || parts[1].ImageURL.URL != "data:image/jpeg;base64,QUJD" {
+		t.Errorf("content parts = %+v", parts)
+	}
+}

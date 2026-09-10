@@ -1,0 +1,16 @@
+{
+  "created": 1757400000,
+  "usage": {
+    "prompt_tokens": 11,
+    "completion_tokens": 0,
+    "total_tokens": 11,
+    "cost": 0.0053
+  },
+  "data": [
+    {
+      "b64_json": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC",
+      "url": "",
+      "media_type": "image/png"
+    }
+  ]
+}
