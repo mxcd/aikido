@@ -25,15 +25,29 @@ type TurnScript struct {
 	Block <-chan struct{}
 }
 
-// StubClient is a scriptable llm.Client.
-type StubClient struct {
-	mu       sync.Mutex
-	turns    []TurnScript
-	cursor   int
-	requests []llm.Request
+// ImageScript is one scripted GenerateImage outcome. Err short-circuits the
+// call; otherwise Response is returned verbatim.
+type ImageScript struct {
+	Response llm.ImageResponse
+	Err      error
 }
 
-var _ llm.Client = (*StubClient)(nil)
+// StubClient is a scriptable llm.Client that also implements the optional
+// llm.ImageGenerator capability.
+type StubClient struct {
+	mu            sync.Mutex
+	turns         []TurnScript
+	cursor        int
+	requests      []llm.Request
+	images        []ImageScript
+	imageCursor   int
+	imageRequests []llm.ImageRequest
+}
+
+var (
+	_ llm.Client         = (*StubClient)(nil)
+	_ llm.ImageGenerator = (*StubClient)(nil)
+)
 
 // NewStubClient returns a StubClient that plays the given turn scripts in order.
 func NewStubClient(turns ...TurnScript) *StubClient {
@@ -128,4 +142,36 @@ func (s *StubClient) Complete(ctx context.Context, req llm.Request) (llm.Respons
 		}
 	}
 	return resp, nil
+}
+
+// ScriptImages appends image scripts consumed by GenerateImage in order.
+// Separate from the turn scripts: a test can drive both endpoints on one stub.
+func (s *StubClient) ScriptImages(scripts ...ImageScript) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.images = append(s.images, scripts...)
+}
+
+// ImageRequests returns a snapshot of every llm.ImageRequest the stub has been
+// called with, in order.
+func (s *StubClient) ImageRequests() []llm.ImageRequest {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]llm.ImageRequest, len(s.imageRequests))
+	copy(out, s.imageRequests)
+	return out
+}
+
+// GenerateImage consumes one ImageScript. Returns ErrStubExhausted when no
+// image scripts remain.
+func (s *StubClient) GenerateImage(_ context.Context, req llm.ImageRequest) (llm.ImageResponse, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.imageCursor >= len(s.images) {
+		return llm.ImageResponse{}, ErrStubExhausted
+	}
+	script := s.images[s.imageCursor]
+	s.imageCursor++
+	s.imageRequests = append(s.imageRequests, req)
+	return script.Response, script.Err
 }

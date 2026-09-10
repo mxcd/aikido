@@ -355,3 +355,35 @@ func buildAPITools(defs []llm.ToolDef) []apiTool {
 	}
 	return out
 }
+
+// --- images-endpoint shapes (POST /api/v1/images) ---
+
+// imagesRequest is the body of OpenRouter's dedicated images endpoint. It is
+// deliberately not chatRequest: the endpoint takes a bare prompt, has no
+// message list and no system role, and names the resolution tier
+// `resolution` (its `size` field wants WxH pixels and rejects "1K").
+type imagesRequest struct {
+	Model           string         `json:"model"`
+	Prompt          string         `json:"prompt"`
+	AspectRatio     string         `json:"aspect_ratio,omitempty"`
+	Resolution      string         `json:"resolution,omitempty"`
+	Quality         string         `json:"quality,omitempty"`
+	InputReferences []apiImagePart `json:"input_references,omitempty"`
+}
+
+// imagesResponse is the images-endpoint success body. A 200 may still carry a
+// top-level error envelope, exactly as on chat completions.
+type imagesResponse struct {
+	Created int64         `json:"created,omitempty"`
+	Data    []imagesDatum `json:"data,omitempty"`
+	Usage   *apiUsage     `json:"usage,omitempty"`
+	Error   *apiError     `json:"error,omitempty"`
+}
+
+// imagesDatum is one generated image. Either B64JSON or URL is set;
+// MediaType may be absent, in which case the content type is sniffed.
+type imagesDatum struct {
+	B64JSON   string `json:"b64_json,omitempty"`
+	URL       string `json:"url,omitempty"`
+	MediaType string `json:"media_type,omitempty"`
+}

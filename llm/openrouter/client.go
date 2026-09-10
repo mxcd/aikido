@@ -190,3 +190,47 @@ func jsonUnmarshalLenient(b []byte, v any) error {
 	}
 	return json.Unmarshal(b, v)
 }
+
+// postJSON sends one JSON body to path (relative to baseURL) and returns the
+// raw response bytes. Every non-streaming endpoint shares it, so retry,
+// headers and error classification stay in one place; JSON parsing is the
+// caller's job and deliberately sits outside the retry loop.
+//
+// Per attempt: a fresh *http.Request over the same body bytes, network errors
+// mapped onto ErrServerError, non-200 through classifyHTTPError, and the body
+// read and closed before the next attempt. Only 429 and 5xx retry, per
+// retryPolicy.
+func (c *Client) postJSON(ctx context.Context, path string, body []byte) ([]byte, error) {
+	var raw []byte
+	err := retry.Do(ctx, retryPolicy(), func(_ int) error {
+		httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+path, bytes.NewReader(body))
+		if err != nil {
+			return fmt.Errorf("openrouter: build http request: %w", err)
+		}
+		c.setHeaders(httpReq)
+		// Non-streaming endpoints return JSON; override the SSE Accept that
+		// setHeaders writes for Stream.
+		httpReq.Header.Set("Accept", "application/json")
+
+		r, err := c.httpClient.Do(httpReq)
+		if err != nil {
+			// Network-layer errors are transient, so treat them as 5xx-class.
+			return fmt.Errorf("openrouter: http error: %w", llm.ErrServerError)
+		}
+		if r.StatusCode != http.StatusOK {
+			// classifyHTTPError closes the body.
+			return classifyHTTPError(r)
+		}
+		defer r.Body.Close()
+		buf, readErr := io.ReadAll(r.Body)
+		if readErr != nil {
+			return fmt.Errorf("openrouter: read body: %w", llm.ErrServerError)
+		}
+		raw = buf
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return raw, nil
+}

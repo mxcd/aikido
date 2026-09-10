@@ -1,15 +1,11 @@
 package openrouter
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
-	"net/http"
 
 	"github.com/mxcd/aikido/llm"
-	"github.com/mxcd/aikido/retry"
 )
 
 // Complete sends a non-streaming chat-completions request and returns the
@@ -34,34 +30,9 @@ func (c *Client) Complete(ctx context.Context, req llm.Request) (llm.Response, e
 		return llm.Response{}, fmt.Errorf("openrouter: build request: %w", err)
 	}
 
-	var raw []byte
-	startErr := retry.Do(ctx, retryPolicy(), func(_ int) error {
-		httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/chat/completions", bytes.NewReader(body))
-		if err != nil {
-			return fmt.Errorf("openrouter: build http request: %w", err)
-		}
-		c.setHeaders(httpReq)
-		// Non-streaming returns JSON; override the SSE Accept set by setHeaders.
-		httpReq.Header.Set("Accept", "application/json")
-
-		r, err := c.httpClient.Do(httpReq)
-		if err != nil {
-			return fmt.Errorf("openrouter: http error: %w", llm.ErrServerError)
-		}
-		if r.StatusCode != http.StatusOK {
-			// classifyHTTPError closes the body.
-			return classifyHTTPError(r)
-		}
-		defer r.Body.Close()
-		buf, readErr := io.ReadAll(r.Body)
-		if readErr != nil {
-			return fmt.Errorf("openrouter: read body: %w", llm.ErrServerError)
-		}
-		raw = buf
-		return nil
-	})
-	if startErr != nil {
-		return llm.Response{}, startErr
+	raw, err := c.postJSON(ctx, "/chat/completions", body)
+	if err != nil {
+		return llm.Response{}, err
 	}
 	return parseCompleteResponse(raw)
 }
