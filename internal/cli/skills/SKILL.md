@@ -28,8 +28,10 @@ The CLI reads OpenRouter credentials in this order:
 2. process environment
 
 Required: `OPENROUTER_API_KEY`.
-Optional: `OPENROUTER_IMAGE_MODEL` (defaults to
-`google/gemini-3.1-flash-image-preview`).
+Optional: `OPENROUTER_IMAGE_MODEL` (defaults to `openai/gpt-image-2.5-flare`).
+Optional: `OPENROUTER_IMAGES_API_MODELS` (comma-separated model ids routed to
+OpenRouter's `POST /api/v1/images` instead of chat completions; a value
+replaces the built-in list, `none` disables the routing).
 
 If neither source has the key, the CLI errors with
 `OPENROUTER_API_KEY is not set`. Tell the user to add it to `.env` in the cwd
@@ -40,19 +42,29 @@ or export it before retrying.
 # Image generation (primary use)
 
 ```sh
-aikido image [--model MODEL] [--out DIR] [--aspect RATIO] [--size 1K|2K|4K] [--max-tokens N] "<prompt>"
+aikido image [--model MODEL] [--out DIR] [--aspect RATIO] [--size 1K|2K|4K] \
+  [--ref FILE] [--quality auto|low|medium|high|xhigh|max] [--max-tokens N] "<prompt>"
 ```
 
 - `--model / -m` — override the model. Falls back to `OPENROUTER_IMAGE_MODEL`,
-  then the compiled-in default `google/gemini-3.1-flash-image-preview`.
+  then the compiled-in default `openai/gpt-image-2.5-flare`.
 - `--out / -o` — output directory (default `./out`). Files are written as
   `image-YYYYMMDD-HHMMSS-NN.{png,jpg,webp,gif}`.
 - `--aspect / -a` — aspect ratio: `1:1`, `16:9`, `9:16`, `4:3`, `3:4`, `3:2`,
   `2:3`, `4:5`, `5:4`, `21:9` (gemini-3.1-flash-image-preview also accepts
-  `1:4`, `4:1`, `1:8`, `8:1`).
+  `1:4`, `4:1`, `1:8`, `8:1`). OpenAI images-API models reject `4:5`.
 - `--size` — output resolution: `1K` (default), `2K`, `4K`
   (gemini-3.1-flash-image-preview also accepts `0.5K`).
-- `--max-tokens` — model output budget (default 1024).
+- `--ref` - a reference image file to edit or take as guidance. Repeat the flag
+  for several. Works on both model families.
+- `--quality` - `auto` (default), `low`, `medium`, `high`, `xhigh`, `max`.
+  Images-API models only; `max` costs about 16x `auto`. Passing it with a
+  chat-completions model is rejected with a clear error.
+- `--max-tokens` - model output budget (default 1024). Chat-completions models
+  only; the images endpoint has no message list to budget.
+- `--images-api-models` - comma-separated ids routed to `/api/v1/images`
+  (env `OPENROUTER_IMAGES_API_MODELS`). Only needed when OpenRouter adds an
+  images-only model the built-in list has not caught up with.
 
 The CLI writes inline image bytes to disk and prints the path plus any returned
 URL, text, and usage/cost line. **Always report the absolute path of every
@@ -62,7 +74,9 @@ file written back to the user.**
 
 | Model id                                  | Use for                                                                  |
 |-------------------------------------------|--------------------------------------------------------------------------|
-| `google/gemini-3.1-flash-image-preview`   | Fast default. Good quality, quick iteration loops.                       |
+| `openai/gpt-image-2.5-flare`              | **Default.** Best product shots; the model-arena human-ranked winner.    |
+| `openai/gpt-image-2.5-sunburst`           | Precision tier, same price as flare, noticeably slower.                  |
+| `google/gemini-3.1-flash-image-preview`   | Fast. Good quality, quick iteration loops.                               |
 | `google/gemini-3-pro-image-preview`       | Higher fidelity, slower. Use when quality matters more than speed.       |
 | `google/gemini-2.5-flash-image`           | Stable older Gemini image model.                                         |
 | `openai/gpt-5.4-image-2`                  | Best text-in-image accuracy and multi-panel/cross-image consistency.     |
@@ -77,7 +91,9 @@ Rules of thumb for **high quality**:
   exact labels, boxes, arrows, and colors. (For diagrams destined for a
   versioned deliverable, also consider Mermaid — editable — but this model is a
   viable raster path.)
-- **Fast iteration / casual visuals** → the default Gemini model.
+- **Product shots and general quality** → the default `openai/gpt-image-2.5-flare`.
+  Expect roughly 0.005 to 0.01 USD and 10 to 18 s per image at `--quality auto`.
+- **Fast iteration / casual visuals** → `-m google/gemini-3.1-flash-image-preview`.
 - **Crisp output** → pass `--size 2K` (or `4K`) and an explicit `--aspect`
   rather than letting the model guess composition.
 
@@ -131,7 +147,8 @@ Details: <2–4 specific elements>. No text, no watermark.
 
 ### Pattern: edit / preserve
 
-Use when the user supplies a reference and wants only one thing changed:
+Use when the user supplies a reference and wants only one thing changed. Pass
+the file with `--ref` and keep the prompt about the delta:
 
 ```
 Using the provided reference image as the base, keep the same <subject>,
@@ -221,11 +238,16 @@ building a Go service; reach for this CLI for one-off terminal tasks.
 
 # When things fail
 
-- `status 404: No endpoints found` → the model id is wrong. List valid image
-  models with:
+- A 404 or 400 mentioning `output modalities` or `use the /api/v1/images
+  endpoint` → endpoint mismatch, not a typo. The model is served only by the
+  images endpoint: add its id to `OPENROUTER_IMAGES_API_MODELS` (or
+  `--images-api-models`) and rerun.
+- Any other `status 404: No endpoints found` → the model id is wrong. Verify
+  against the images-capable listing; images-only models are missing from a
+  plain `/models` response, so ask for them explicitly:
   ```sh
   curl -s -H "Authorization: Bearer $OPENROUTER_API_KEY" \
-    https://openrouter.ai/api/v1/models | jq -r '.data[].id' | grep image
+    "https://openrouter.ai/api/v1/models?output_modalities=image" | jq -r '.data[].id'
   ```
 - `provider server error` → transient; retry once, then switch model.
 - `provider returned no images` → the model returned text only. Use an

@@ -11,7 +11,7 @@ Backed by OpenRouter in v1; designed so v2 can plug in direct providers (Anthrop
 ## What you get in v1
 
 - **`llm`** — provider-agnostic `Client`, streaming `Event` channel, `Request` shape with cache breakpoints, thinking config, and explicit `*float32` temperature.
-- **`llm/openrouter`** — real SSE streaming, tool-call assembly across fragments, 429/5xx retry at stream-start, `ProviderOrder` routing.
+- **`llm/openrouter`** - real SSE streaming, tool-call assembly across fragments, 429/5xx retry at stream-start, `ProviderOrder` routing, and `GenerateImage` for the models OpenRouter serves only on `POST /api/v1/images`.
 - **`llm/llmtest`** — `StubClient` for scripting multi-turn conversations in your tests.
 - **`tools`** — registry, dispatch, explicit JSON-Schema helpers.
 - **`vfs`** — minimal four-method `Storage` interface plus optional `ScopedStorage` and `Searchable` capabilities. Bundled backends:
@@ -39,17 +39,23 @@ fmt.Printf("cost=$%.6f\n", usage.CostUSD)
 
 ### Image generation
 
-Image-capable OpenRouter models (e.g. `google/gemini-2.5-flash-image-preview`,
-`openai/gpt-image-1`) surface generated images on the same `llm.Client`
-streaming surface. Inline `data:` URIs are decoded to bytes; remote URLs
-pass through verbatim. `Collect` returns them as the third positional value.
+Image-capable OpenRouter models reach aikido through two paths. Models that
+answer on chat completions (`google/gemini-3.1-flash-image-preview`,
+`openai/gpt-5.4-image-2`) use `Complete` with `Modalities: []string{"image", "text"}` -
+`Complete`, not `Collect`, because a base64 payload routinely exceeds the SSE
+per-line cap. Inline `data:` URIs are decoded to bytes; remote URLs pass
+through verbatim.
 
 ```go
-_, _, images, _, _ := llm.Collect(ctx, client, llm.Request{
-    Model:    "google/gemini-2.5-flash-image-preview",
-    Messages: []llm.Message{{Role: llm.RoleUser, Content: "A pixel-art fox in tall grass."}},
+resp, err := client.Complete(ctx, llm.Request{
+    Model:      "google/gemini-3.1-flash-image-preview",
+    Messages:   []llm.Message{{Role: llm.RoleUser, Content: "A pixel-art fox in tall grass."}},
+    Modalities: []string{"image", "text"},
 })
-for i, img := range images {
+if err != nil {
+    log.Fatal(err)
+}
+for i, img := range resp.Images {
     if len(img.Data) > 0 {
         _ = os.WriteFile(fmt.Sprintf("out-%d.png", i), img.Data, 0o644)
     } else if img.URL != "" {
@@ -58,9 +64,28 @@ for i, img := range images {
 }
 ```
 
-When streaming, the same data flows as `llm.EventImage` events. In agent
-runs, `Drain` populates `llm.Message.Images` on the assembled assistant
-message, mirroring how `ToolCalls` are handled.
+Models served only by OpenRouter's dedicated images endpoint
+(`openai/gpt-image-2.5-flare` and friends, which never answer on chat
+completions and are missing from a plain `GET /models` listing) go through the
+optional `llm.ImageGenerator` capability instead:
+
+```go
+gen, ok := client.(llm.ImageGenerator)
+if !ok {
+    log.Fatal("client has no images endpoint")
+}
+resp, err := gen.GenerateImage(ctx, llm.ImageRequest{
+    Model:       "openai/gpt-image-2.5-flare",
+    Prompt:      "A pixel-art fox in tall grass.",
+    AspectRatio: "16:9",
+    ImageSize:   "2K",
+    Quality:     "high",
+})
+```
+
+When streaming the chat path, the same data flows as `llm.EventImage` events.
+In agent runs, `Drain` populates `llm.Message.Images` on the assembled
+assistant message, mirroring how `ToolCalls` are handled.
 
 ### Agent over a writable VFS
 
@@ -121,9 +146,20 @@ export OPENROUTER_API_KEY=sk-or-...   # or place it in .env in the cwd
 aikido chat "Give me one fun fact about Go."
 aikido agent "Create plan.md with one bullet, then list files."
 aikido image --aspect 16:9 --size 2K "A pixel-art fox in tall grass."
+aikido image -m google/gemini-3.1-flash-image-preview "A quick draft."
+aikido image --ref logo.png --quality high "The same logo on a matte black mug."
 ```
 
 `aikido --help` for the full flag list. `chat` and `agent` accept `--model`, `--system`, `--max-tokens`, `--temperature`.
+
+`image` defaults to `openai/gpt-image-2.5-flare`, which OpenRouter serves only
+through `POST /api/v1/images`; `OPENROUTER_IMAGE_MODEL` or `-m` overrides it.
+Which ids take that endpoint is the `--images-api-models` list
+(`OPENROUTER_IMAGES_API_MODELS`, comma-separated): a value replaces the
+built-in list, and something non-matching like `none` disables the routing.
+The Gemini image models are deliberately off the list and keep the
+chat-completions path. `--ref` attaches reference images on both paths (repeat
+it for several); `--quality` is images-endpoint only.
 
 ### Claude Code skill
 

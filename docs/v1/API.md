@@ -145,6 +145,33 @@ type Request struct {
     Temperature   *float32         // nil = provider default; non-nil = explicit, clamped per provider range
     Thinking      *ThinkingConfig  // nil = no thinking; non-nil per the ThinkingConfig docs
     StopSequences []string
+    Modalities    []string         // ["image", "text"] to ask an image-capable model for image output
+    ImageConfig   *ImageConfig     // nil = provider defaults (typically 1:1 / 1K)
+}
+
+// ImageConfig tunes image output on the chat-completions path. Forwarded as
+// the `image_config` field; non-image models ignore it. Empty fields are
+// omitted so the provider default applies per-field.
+type ImageConfig struct {
+    AspectRatio string // "1:1", "16:9", "9:16", "4:3", "3:4", "3:2", "2:3", "4:5", "5:4", "21:9"
+    ImageSize   string // "1K", "2K", "4K"
+}
+
+// ImageRequest is one call to a provider's dedicated images endpoint. No
+// message list: those endpoints take a bare prompt and have no system role.
+type ImageRequest struct {
+    Model       string
+    Prompt      string
+    AspectRatio string      // as ImageConfig.AspectRatio
+    ImageSize   string      // as ImageConfig.ImageSize; sent as the endpoint's `resolution`
+    Quality     string      // "auto" | "low" | "medium" | "high" | "xhigh" | "max"; empty = provider default
+    References  []ImagePart // input images; only URL is read (data: or https)
+}
+
+// ImageResponse is the fully-assembled result of an images-endpoint call.
+type ImageResponse struct {
+    Images []ImagePart
+    Usage  *Usage
 }
 
 // EventKind identifies the kind of a streaming event. String-valued so new
@@ -163,17 +190,37 @@ const (
 
 // Event is one streaming event emitted by a Client.
 type Event struct {
-    Kind  EventKind
-    Text  string     // EventTextDelta or EventThinking
-    Tool  *ToolCall  // EventToolCall
-    Image *ImagePart // EventImage
-    Usage *Usage     // EventUsage
-    Err   error      // EventError
+    Kind         EventKind
+    Text         string     // EventTextDelta or EventThinking
+    Tool         *ToolCall  // EventToolCall
+    Image        *ImagePart // EventImage
+    Usage        *Usage     // EventUsage
+    Err          error      // EventError
+    FinishReason string     // EventEnd (and the EventError standing in for content_filter)
 }
 
-// Client is the only interface a provider must implement.
+// Response is the fully-assembled result of a non-streaming completion.
+// Complete is the right choice for image output on the chat path: the SSE
+// per-line cap cannot hold a multi-MB single-chunk image response.
+type Response struct {
+    Text         string
+    ToolCalls    []ToolCall
+    Images       []ImagePart
+    Usage        *Usage
+    FinishReason string
+}
+
+// Client is the interface every provider must implement.
 type Client interface {
     Stream(ctx context.Context, req Request) (<-chan Event, error)
+    Complete(ctx context.Context, req Request) (Response, error)
+}
+
+// ImageGenerator is an optional capability implemented by clients that speak a
+// dedicated images endpoint. Callers type-assert on it (ADR-029) and fall back
+// to Complete with Modalities: []string{"image", "text"} when it is absent.
+type ImageGenerator interface {
+    GenerateImage(ctx context.Context, req ImageRequest) (ImageResponse, error)
 }
 
 // Collect drains a stream into a final result. Useful for non-streaming callers.
@@ -189,6 +236,7 @@ var (
     ErrRateLimited    error // wrap when provider returns 429
     ErrServerError    error // wrap when provider returns 5xx
     ErrInvalidRequest error // wrap when provider returns 400
+    ErrContentFiltered error // wrap on a content-filter rejection (ADR-028)
 )
 ```
 
@@ -226,11 +274,23 @@ type Client struct{ /* ... */ }
 // NewClient constructs an OpenRouter client. Returns an error if APIKey is empty.
 func NewClient(opts *Options) (*Client, error)
 
-var _ llm.Client = (*Client)(nil)
+var (
+    _ llm.Client         = (*Client)(nil)
+    _ llm.ImageGenerator = (*Client)(nil)
+)
 
 // Stream sends one request to OpenRouter and yields events as they arrive.
 // The channel closes when the stream terminates (EventEnd always emitted last).
 func (c *Client) Stream(ctx context.Context, req llm.Request) (<-chan llm.Event, error)
+
+// Complete sends one non-streaming chat-completions request and returns the
+// assembled response in one shot.
+func (c *Client) Complete(ctx context.Context, req llm.Request) (llm.Response, error)
+
+// GenerateImage renders one prompt through POST /api/v1/images, the only
+// endpoint serving models like openai/gpt-image-2.5-flare. Models that answer
+// on chat completions should keep using Complete.
+func (c *Client) GenerateImage(ctx context.Context, req llm.ImageRequest) (llm.ImageResponse, error)
 ```
 
 ---
@@ -265,7 +325,30 @@ func NewStubClient(turns ...TurnScript) *StubClient
 // scripts remain.
 func (s *StubClient) Stream(ctx context.Context, req llm.Request) (<-chan llm.Event, error)
 
-var _ llm.Client = (*StubClient)(nil)
+// Complete folds the next TurnScript's events into a Response, so one script
+// drives both the streaming and the non-streaming caller.
+func (s *StubClient) Complete(ctx context.Context, req llm.Request) (llm.Response, error)
+
+// ImageScript is one scripted GenerateImage outcome. Err short-circuits the
+// call; otherwise Response is returned verbatim.
+type ImageScript struct {
+    Response llm.ImageResponse
+    Err      error
+}
+
+// ScriptImages appends image scripts, consumed by GenerateImage in order.
+func (s *StubClient) ScriptImages(scripts ...ImageScript)
+
+// GenerateImage consumes one ImageScript. Returns ErrStubExhausted when none remain.
+func (s *StubClient) GenerateImage(ctx context.Context, req llm.ImageRequest) (llm.ImageResponse, error)
+
+// ImageRequests returns every llm.ImageRequest the stub has been called with, in order.
+func (s *StubClient) ImageRequests() []llm.ImageRequest
+
+var (
+    _ llm.Client         = (*StubClient)(nil)
+    _ llm.ImageGenerator = (*StubClient)(nil)
+)
 
 // ErrStubExhausted is returned when Stream is called with no remaining scripts.
 var ErrStubExhausted error

@@ -469,3 +469,65 @@ There's a third shape — **silent mid-stream RST** — where the provider just 
 - Existing `IsTransientServerError` continues to match only `ErrServerError` — content-filter errors are correctly excluded from retry by default.
 
 **Consequences.** Hub-side and other callers can branch cleanly: skip retry on `IsContentFilter(err)`, render user-actionable "try different wording" copy, save the typically-multiple-cents per request that retrying a flagged prompt would otherwise burn. The `EventEnd.FinishReason` field is additive and safe under the v1 stability promise. Silent-RST content aborts remain unsolved at the protocol level — the caller-side "all-retries-identical" heuristic is the only signal there.
+
+---
+
+## ADR-029 - Images endpoint as an optional `ImageGenerator` capability
+
+**Date:** 10.09.2026
+**Status:** Accepted
+
+**Context.** OpenRouter serves some image models only through `POST /api/v1/images`:
+`openai/gpt-image-2.5-flare` (the model-arena human-ranked winner for product
+shots, and now aikido's default image model), `openai/gpt-image-2.5-sunburst`,
+`openai/gpt-image-2`, `meta/muse-image`. They never answer on chat completions
+and are missing from a plain `GET /models` listing, so the 404 a caller gets
+reads like a typo rather than an endpoint mismatch. The endpoint's request
+shape is not a chat request: a bare `prompt` instead of a message list, no
+system role, `resolution` instead of `image_config.image_size` (its own `size`
+field wants `WxH` pixels and rejects the `1K`/`2K`/`4K` tiers), a `quality`
+knob chat completions has no equivalent for, and `input_references[]` for
+input images. Models that accept both endpoints (the Gemini image family,
+`openai/gpt-5.4-image-2`) still belong on chat completions, which is the only
+path that carries a conversation.
+
+**Decision.**
+- Model the endpoint as an **optional capability interface**, `llm.ImageGenerator`,
+  the pattern ADR-020 already uses for `vfs.ScopedStorage` and `vfs.Searchable` -
+  not a third method on `llm.Client`, which every provider would then have to
+  implement whether or not it has such an endpoint. `openrouter.Client` and
+  `llmtest.StubClient` implement it; callers type-assert.
+- `llm.ImageRequest` / `llm.ImageResponse` are their own types rather than a
+  flag on `Request`. The wire shapes have almost nothing in common, and a
+  message list that is silently ignored is worse than no field at all.
+- Extract `Client.postJSON(ctx, path, body)` so both non-streaming endpoints
+  share one retry loop, one header set (`Accept: application/json` overriding
+  the SSE default) and one error classification. JSON parsing stays outside
+  the retry loop: a 200 carrying a top-level `error` envelope is a decode-time
+  failure, and retrying it would bill the caller for a deterministic error.
+- **Keep `Complete`'s 200-only rule on the new endpoint.** model-arena, where
+  the wire contract was verified, accepts any 2xx. aikido does not: anything
+  other than 200 goes through `classifyHTTPError`, so a hypothetical 201 shows
+  up as a retried `ErrServerError` rather than being parsed as success. One
+  status code is the contract we can test; a 2xx range invites a body shape
+  nobody has seen.
+- Routing lives in the CLI, not the library: `--images-api-models`
+  (`OPENROUTER_IMAGES_API_MODELS`) is a comma-separated list of ids, matched
+  after trimming whitespace and dropping a `:variant` suffix. A value replaces
+  the built-in list; `none` disables the routing. The library stays free of a
+  model catalog, per ADR-025.
+
+**Consequences.** The public surface grows by `ImageRequest`, `ImageResponse`,
+`ImageGenerator`, `Client.GenerateImage` and three `StubClient` methods, all
+additive under the v1 promise. `aikido image` defaults to
+`openai/gpt-image-2.5-flare`, which changes cost and latency for every skill
+user: roughly 0.005 to 0.01 USD and 10 to 18 s per image at `quality=auto`,
+against the Gemini model's faster and cheaper draft. Gemini stays one `-m`
+flag away and the bundled SKILL.md names it as the fast-iteration choice.
+Model-id drift is the standing risk: OpenRouter renames and delists without
+notice, so a wrong entry in the built-in list is one env var away from fixed,
+and the images-endpoint hint on a 404 tells users which var to set. Not
+covered here: pixel-exact `size` (`WxH`), reference-image downscaling, catalog
+auto-detection via `GET /models?output_modalities=image`, and streaming for
+images. `postJSON` has no read cap and retries 5xx and read failures exactly
+as `Complete` did before, so a large body still costs what it costs.
