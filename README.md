@@ -87,6 +87,11 @@ resp, err := client.GenerateImage(ctx, llm.ImageRequest{
 })
 ```
 
+A frame the ratio list does not offer (OpenAI rejects `4:5`, and renders `3:4`
+as 1024x1536) is requested as explicit pixels instead: `Size: "1024x1280"`,
+alone, without `AspectRatio`/`ImageSize`. OpenAI wants both sides divisible by
+16 and the longest edge at most 3840.
+
 Code holding a plain `llm.Client` type-asserts first, since not every provider
 has such an endpoint:
 

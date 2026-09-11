@@ -135,9 +135,38 @@ func TestGenerateImage_OmitsUnsetFields(t *testing.T) {
 	if err := json.Unmarshal(gotBody, &body); err != nil {
 		t.Fatalf("decode body: %v", err)
 	}
-	for _, k := range []string{"aspect_ratio", "resolution", "quality", "input_references"} {
+	for _, k := range []string{"aspect_ratio", "resolution", "size", "quality", "input_references"} {
 		if _, ok := body[k]; ok {
 			t.Errorf("body carries %q when unset: %s", k, gotBody)
+		}
+	}
+}
+
+func TestBuildImagesBody_Size(t *testing.T) {
+	body, err := buildImagesBody(llm.ImageRequest{Model: "m", Prompt: "p", Size: "1024x1280", Quality: "medium"})
+	if err != nil {
+		t.Fatalf("buildImagesBody: %v", err)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(body, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got["size"] != "1024x1280" {
+		t.Errorf("size = %v", got["size"])
+	}
+	for _, k := range []string{"aspect_ratio", "resolution"} {
+		if _, ok := got[k]; ok {
+			t.Errorf("body carries %q next to size", k)
+		}
+	}
+	for _, bad := range []llm.ImageRequest{
+		{Model: "m", Prompt: "p", Size: "1K"},
+		{Model: "m", Prompt: "p", Size: "1024x"},
+		{Model: "m", Prompt: "p", Size: "1024x1280", AspectRatio: "4:5"},
+		{Model: "m", Prompt: "p", Size: "1024x1280", ImageSize: "1K"},
+	} {
+		if _, err := buildImagesBody(bad); !errors.Is(err, llm.ErrInvalidRequest) {
+			t.Errorf("Size %q with ratio %q tier %q: err = %v, want ErrInvalidRequest", bad.Size, bad.AspectRatio, bad.ImageSize, err)
 		}
 	}
 }

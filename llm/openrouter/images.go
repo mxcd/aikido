@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"regexp"
 	"strings"
 
 	"github.com/mxcd/aikido/llm"
@@ -40,9 +41,13 @@ func (c *Client) GenerateImage(ctx context.Context, req llm.ImageRequest) (llm.I
 	return parseImagesResponse(raw)
 }
 
+// sizePattern is the endpoint's `size` shape: WIDTHxHEIGHT in pixels.
+var sizePattern = regexp.MustCompile(`^[1-9][0-9]{2,3}x[1-9][0-9]{2,3}$`)
+
 // buildImagesBody assembles the images-endpoint JSON body. Unset optional
 // fields stay off the wire. ImageSize maps onto `resolution`, never `size`:
-// the endpoint's `size` field wants WxH pixels and rejects the 1K/2K/4K tiers.
+// the endpoint's `size` field wants WxH pixels (ImageRequest.Size) and rejects
+// the 1K/2K/4K tiers.
 func buildImagesBody(req llm.ImageRequest) ([]byte, error) {
 	if strings.TrimSpace(req.Model) == "" {
 		return nil, fmt.Errorf("model is required: %w", llm.ErrInvalidRequest)
@@ -50,11 +55,20 @@ func buildImagesBody(req llm.ImageRequest) ([]byte, error) {
 	if strings.TrimSpace(req.Prompt) == "" {
 		return nil, fmt.Errorf("prompt is required: %w", llm.ErrInvalidRequest)
 	}
+	if req.Size != "" {
+		if !sizePattern.MatchString(req.Size) {
+			return nil, fmt.Errorf("size %q: want WIDTHxHEIGHT in pixels: %w", req.Size, llm.ErrInvalidRequest)
+		}
+		if req.AspectRatio != "" || req.ImageSize != "" {
+			return nil, fmt.Errorf("size and aspect ratio/resolution are mutually exclusive: %w", llm.ErrInvalidRequest)
+		}
+	}
 	ir := imagesRequest{
 		Model:       req.Model,
 		Prompt:      req.Prompt,
 		AspectRatio: req.AspectRatio,
 		Resolution:  req.ImageSize,
+		Size:        req.Size,
 		Quality:     req.Quality,
 	}
 	for i, ref := range req.References {

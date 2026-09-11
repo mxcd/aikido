@@ -377,6 +377,7 @@ type imagesRequest struct {
 	Prompt          string         `json:"prompt"`
 	AspectRatio     string         `json:"aspect_ratio,omitempty"`
 	Resolution      string         `json:"resolution,omitempty"`
+	Size            string         `json:"size,omitempty"`
 	Quality         string         `json:"quality,omitempty"`
 	InputReferences []apiImagePart `json:"input_references,omitempty"`
 }

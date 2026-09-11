@@ -164,6 +164,7 @@ type ImageRequest struct {
     Prompt      string
     AspectRatio string      // as ImageConfig.AspectRatio
     ImageSize   string      // as ImageConfig.ImageSize; sent as the endpoint's `resolution`
+    Size        string      // explicit "WIDTHxHEIGHT" pixels, sent as `size`; exclusive with AspectRatio/ImageSize
     Quality     string      // "auto" | "low" | "medium" | "high" | "xhigh" | "max"; empty = provider default
     References  []ImagePart // input images; only URL is read (data: or https)
 }

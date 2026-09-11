@@ -20,6 +20,14 @@ type ImageRequest struct {
 	// ImageConfig.ImageSize. Sent as the endpoint's `resolution` field.
 	ImageSize string
 
+	// Size is an explicit "WIDTHxHEIGHT" in pixels, sent as the endpoint's
+	// `size` field. It is the way to get a frame the ratio list does not
+	// offer: OpenAI rejects aspect_ratio 4:5 but renders size 1024x1280, and
+	// renders 3:4 as 1024x1536 while 1024x1365 comes back exact. OpenAI wants
+	// both sides divisible by 16 and the longest edge at most 3840. Set Size
+	// OR AspectRatio+ImageSize, not both: the provider refuses the mix.
+	Size string
+
 	// Quality is "auto", "low", "medium", "high", "xhigh" or "max". Empty
 	// leaves the provider default (auto). On OpenAI models "max" costs about
 	// 16x auto.
