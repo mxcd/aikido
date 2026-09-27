@@ -5,8 +5,8 @@
 // The backend speaks the OpenAI Responses API with a few rules: it only
 // streams, never stores, and rejects max_output_tokens. Supported: system
 // messages (as instructions), user and assistant text, image input and
-// structured output (llm.Request.ResponseFormat). Tools, tool results and
-// Thinking are not supported and fail with llm.ErrInvalidRequest;
+// structured output (llm.Request.ResponseFormat). Tools, tool results, audio
+// input and Thinking are not supported and fail with llm.ErrInvalidRequest;
 // MaxTokens, Temperature, StopSequences, Modalities and ImageConfig are ignored.
 //
 // Log in with StartDeviceLogin + PollDeviceLogin (or ParseAuthJSON), wrap the
@@ -261,6 +261,9 @@ func buildBody(req llm.Request) ([]byte, error) {
 		case llm.RoleUser, llm.RoleAssistant:
 			if len(m.ToolCalls) > 0 {
 				return nil, fmt.Errorf("codex: tool calls are not supported: %w", llm.ErrInvalidRequest)
+			}
+			if len(m.Audio) > 0 {
+				return nil, fmt.Errorf("codex: audio input is not supported: %w", llm.ErrInvalidRequest)
 			}
 			textType := "input_text"
 			if m.Role == llm.RoleAssistant {

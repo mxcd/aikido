@@ -107,6 +107,10 @@ func TestStream_RejectsToolsAndMapsStatus(t *testing.T) {
 	if _, err := c.Stream(context.Background(), llm.Request{Tools: []llm.ToolDef{{Name: "x"}}}); !errors.Is(err, llm.ErrInvalidRequest) {
 		t.Errorf("tools: %v", err)
 	}
+	audio := llm.Request{Messages: []llm.Message{{Role: llm.RoleUser, Audio: []llm.AudioPart{{Data: []byte{1}, Format: "wav"}}}}}
+	if _, err := c.Stream(context.Background(), audio); !errors.Is(err, llm.ErrInvalidRequest) || !strings.Contains(err.Error(), "audio input is not supported") {
+		t.Errorf("audio: %v", err)
+	}
 	if _, err := c.Stream(context.Background(), llm.Request{Model: "m"}); !errors.Is(err, llm.ErrInvalidRequest) {
 		t.Errorf("400: %v", err)
 	}

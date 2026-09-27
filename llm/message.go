@@ -21,6 +21,15 @@ type ImagePart struct {
 	Data        []byte
 }
 
+// AudioPart is one audio clip attached to a message. Data is the encoded clip
+// as recorded; Format names its container the way OpenRouter's input_audio
+// expects it ("wav", "mp3", "m4a", "webm", "ogg", "flac", "aiff"). AudioFormat
+// derives Format from a MIME type.
+type AudioPart struct {
+	Data   []byte
+	Format string
+}
+
 type ToolCall struct {
 	ID        string
 	Name      string
@@ -52,6 +61,7 @@ type Message struct {
 	Role       Role
 	Content    string
 	Images     []ImagePart
+	Audio      []AudioPart
 	ToolCalls  []ToolCall
 	ToolCallID string
 	Cache      *CacheBreakpoint

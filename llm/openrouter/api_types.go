@@ -1,6 +1,7 @@
 package openrouter
 
 import (
+	"encoding/base64"
 	"encoding/json"
 
 	"github.com/mxcd/aikido/llm"
@@ -296,7 +297,7 @@ func buildAPIMessages(in []llm.Message) ([]apiMessage, error) {
 		//   1. plain string  — text-only, no images, no cache breakpoint.
 		//   2. array of typed parts — multimodal or cache breakpoint.
 		//   3. empty string ("") — assistant with only tool calls.
-		needArray := len(m.Images) > 0 || m.Cache != nil
+		needArray := len(m.Images) > 0 || len(m.Audio) > 0 || m.Cache != nil
 		switch {
 		case needArray:
 			parts, err := buildContentParts(m)
@@ -325,10 +326,10 @@ func buildAPIMessages(in []llm.Message) ([]apiMessage, error) {
 	return out, nil
 }
 
-// buildContentParts builds the typed-parts array for a message with images or
-// a cache breakpoint. The cache_control directive lands on the last part.
+// buildContentParts builds the typed-parts array for a message with images,
+// audio or a cache breakpoint. The cache_control directive lands on the last part.
 func buildContentParts(m llm.Message) ([]map[string]any, error) {
-	parts := make([]map[string]any, 0, 1+len(m.Images))
+	parts := make([]map[string]any, 0, 1+len(m.Images)+len(m.Audio))
 	if m.Content != "" {
 		parts = append(parts, map[string]any{
 			"type": "text",
@@ -340,6 +341,15 @@ func buildContentParts(m llm.Message) ([]map[string]any, error) {
 			"type": "image_url",
 			"image_url": map[string]any{
 				"url": img.URL,
+			},
+		})
+	}
+	for _, a := range m.Audio {
+		parts = append(parts, map[string]any{
+			"type": "input_audio",
+			"input_audio": map[string]any{
+				"data":   base64.StdEncoding.EncodeToString(a.Data),
+				"format": a.Format,
 			},
 		})
 	}
