@@ -156,3 +156,33 @@ func TestParseAuthJSON(t *testing.T) {
 		}
 	}
 }
+
+// A caller that gives up mid-refresh must not lose the rotated login.
+func TestTokenSourceRefreshSurvivesCancel(t *testing.T) {
+	release := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		<-release
+		_ = json.NewEncoder(w).Encode(map[string]string{"access_token": fakeJWT(t, time.Now().Add(time.Hour), "acct"), "refresh_token": "rt.new"})
+	}))
+	defer srv.Close()
+	var saved Tokens
+	persisted := make(chan struct{})
+	ts := NewTokenSource(Tokens{AccessToken: "old", RefreshToken: "rt.old", ExpiresAt: time.Now()}, func(_ context.Context, tok Tokens) error {
+		saved = tok
+		close(persisted)
+		return nil
+	}, &AuthOptions{Issuer: srv.URL})
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() { _, _ = ts.Token(ctx) }()
+	time.Sleep(50 * time.Millisecond)
+	cancel()
+	close(release)
+	select {
+	case <-persisted:
+	case <-time.After(5 * time.Second):
+		t.Fatal("refresh was dropped with the cancelled caller")
+	}
+	if saved.RefreshToken != "rt.new" {
+		t.Fatalf("persisted %q, want rt.new", saved.RefreshToken)
+	}
+}

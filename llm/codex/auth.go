@@ -252,6 +252,11 @@ func (s *TokenSource) Token(ctx context.Context) (Tokens, error) {
 	if time.Until(s.tok.ExpiresAt) > refreshSkew {
 		return s.tok, nil
 	}
+	// The refresh and its persisting outlive the caller: once OpenAI rotated the
+	// refresh token, dropping the answer (a cancelled request) would leave only the
+	// used one, and replaying that revokes the login.
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), time.Minute)
+	defer cancel()
 	fresh, err := exchange(ctx, s.opts, nil, s.tok.RefreshToken)
 	if err != nil {
 		return Tokens{}, err
