@@ -171,6 +171,12 @@ func (c *Client) buildBody(req llm.Request, stream bool) ([]byte, error) {
 			ImageSize:   ic.ImageSize,
 		}
 	}
+	if rf := req.ResponseFormat; rf != nil {
+		cr.ResponseFormat = &apiResponseFormat{
+			Type:       "json_schema",
+			JSONSchema: apiJSONSchema{Name: rf.Name, Strict: rf.Strict, Schema: rf.Schema},
+		}
+	}
 	if eff := effortFromConfig(req.Thinking); eff != "" {
 		cr.Reasoning = &apiReasoning{Effort: eff}
 	}

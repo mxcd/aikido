@@ -24,6 +24,20 @@ type chatRequest struct {
 	Modalities  []string         `json:"modalities,omitempty"`
 	ImageConfig *apiImageConfig  `json:"image_config,omitempty"`
 	Usage       *apiUsageOptions `json:"usage,omitempty"`
+	// ResponseFormat carries structured-output requests (llm.JSONSchema).
+	ResponseFormat *apiResponseFormat `json:"response_format,omitempty"`
+}
+
+// apiResponseFormat is the OpenAI-compatible structured-output block.
+type apiResponseFormat struct {
+	Type       string        `json:"type"` // "json_schema"
+	JSONSchema apiJSONSchema `json:"json_schema"`
+}
+
+type apiJSONSchema struct {
+	Name   string          `json:"name"`
+	Strict bool            `json:"strict"`
+	Schema json.RawMessage `json:"schema"`
 }
 
 // apiUsageOptions is OpenRouter's usage-accounting block. With Include set the
