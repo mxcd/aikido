@@ -1,6 +1,9 @@
 package llm
 
-import "context"
+import (
+	"context"
+	"encoding/json"
+)
 
 type Request struct {
 	Model         string
@@ -21,6 +24,22 @@ type Request struct {
 	// Honored only by image-capable models. Nil leaves provider defaults
 	// (typically 1:1 / 1K).
 	ImageConfig *ImageConfig
+	// ResponseFormat asks for JSON matching a schema (structured output).
+	// Nil leaves free-form text.
+	ResponseFormat *JSONSchema
+}
+
+// JSONSchema constrains a response to JSON matching Schema. Providers map it
+// onto their structured-output field (OpenRouter `response_format`, the Codex
+// Responses API `text.format`).
+type JSONSchema struct {
+	// Name identifies the schema, [a-zA-Z0-9_-] only.
+	Name string
+	// Schema is a JSON Schema object.
+	Schema json.RawMessage
+	// Strict asks the provider to enforce the schema exactly. Strict schemas
+	// need additionalProperties:false and every property listed as required.
+	Strict bool
 }
 
 // ImageConfig configures image-output generation. Forwarded as the

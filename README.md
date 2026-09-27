@@ -12,6 +12,8 @@ Backed by OpenRouter in v1; designed so v2 can plug in direct providers (Anthrop
 
 - **`llm`** — provider-agnostic `Client`, streaming `Event` channel, `Request` shape with cache breakpoints, thinking config, and explicit `*float32` temperature.
 - **`llm/openrouter`** - real SSE streaming, tool-call assembly across fragments, 429/5xx retry at stream-start, `ProviderOrder` routing, and `GenerateImage` for the models OpenRouter serves only on `POST /api/v1/images`.
+- **`llm/codex`** - the Codex backend of a ChatGPT subscription (bills the subscription, not an API key): device-code login, a `TokenSource` that refreshes and hands every rotated login back for persisting, streaming text, image input and structured output. No tools.
+- **`llm.Request.ResponseFormat`** - structured output (`llm.JSONSchema`), mapped by `llm/openrouter` and `llm/codex`.
 - **`llm/llmtest`** — `StubClient` for scripting multi-turn conversations in your tests.
 - **`tools`** — registry, dispatch, explicit JSON-Schema helpers.
 - **`vfs`** — minimal four-method `Storage` interface plus optional `ScopedStorage` and `Searchable` capabilities. Bundled backends:
@@ -156,6 +158,21 @@ session, _ := agent.NewLocalSession(&agent.SessionOptions{
 ```
 
 The model can `search`, `list_files`, and `read_file` against the embedded markdown — but cannot mutate it. Defense in depth: `vfs/embedfs` would also reject mutations even if the tools were registered.
+
+### ChatGPT subscription (`llm/codex`)
+
+```go
+dc, _ := codex.StartDeviceLogin(ctx, nil)       // show dc.VerificationURL + dc.UserCode
+login, _ := codex.PollDeviceLogin(ctx, nil, dc) // blocks until confirmed (15 min max)
+
+tokens := codex.NewTokenSource(login, func(ctx context.Context, t codex.Tokens) error {
+    return store.Save(ctx, t) // the refresh token rotates and is single-use: persist every refresh
+}, nil)
+client, _ := codex.NewClient(&codex.Options{Tokens: tokens, Originator: "my-app"})
+res, _ := client.Complete(ctx, llm.Request{Model: "gpt-5.5", Messages: msgs, ResponseFormat: schema})
+```
+
+Keep one `TokenSource` per login and process, and do not share a login with the Codex CLI (`codex.ParseAuthJSON` reads its `auth.json`): a refresh token used twice revokes the login, surfacing as `codex.ErrReauthRequired`.
 
 Four runnable examples under [`examples/`](examples/): `chat-oneshot`, `image-generation`, `agent-vfs`, `chatbot`.
 
