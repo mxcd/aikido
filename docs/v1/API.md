@@ -46,6 +46,14 @@ type ImagePart struct {
     Data        []byte // inline bytes (empty when URL is set)
 }
 
+// AudioPart is one audio clip attached to a message. Format names the
+// container as OpenRouter's input_audio expects it ("wav", "mp3", "m4a",
+// "webm", "ogg", "flac", "aiff"); AudioFormat derives it from a MIME type.
+type AudioPart struct {
+    Data   []byte // encoded clip, sent base64
+    Format string
+}
+
 // ToolCall is one tool invocation from the model. Arguments is complete JSON
 // (assembled client-side from streaming fragments).
 type ToolCall struct {
@@ -79,6 +87,7 @@ type Message struct {
     Role       Role
     Content    string             // empty allowed (assistant with only tool calls)
     Images     []ImagePart        // user / assistant only
+    Audio      []AudioPart        // user only; codex rejects it with ErrInvalidRequest
     ToolCalls  []ToolCall         // assistant only
     ToolCallID string             // tool role only — ID this message replies to
     Cache      *CacheBreakpoint   // nil = no breakpoint; non-nil = anthropic-style cache_control hint
@@ -230,6 +239,25 @@ type ImageGenerator interface {
 // one, and the first error encountered. EventThinking text is not included
 // in the returned text.
 func Collect(ctx context.Context, c Client, req Request) (text string, calls []ToolCall, images []ImagePart, usage *Usage, err error)
+
+// AudioFormat maps an audio MIME type ("audio/webm;codecs=opus",
+// "audio/mp4", ...) onto AudioPart.Format. Unknown types return an error.
+func AudioFormat(contentType string) (string, error)
+
+// DefaultTranscribeModel is Transcribe's model when the request names none.
+const DefaultTranscribeModel = "google/gemini-3.1-flash-lite"
+
+// TranscribeRequest is one speech-to-text call.
+type TranscribeRequest struct {
+    Model  string // default DefaultTranscribeModel
+    Audio  []byte
+    Format string // AudioPart.Format
+    Hint   string // appended to the instruction: language, vocabulary; no example sentences
+}
+
+// Transcribe returns the speech in req.Audio as text via c.Complete at
+// temperature 0. A clip without intelligible speech returns "", not an error.
+func Transcribe(ctx context.Context, c Client, req TranscribeRequest) (string, *Usage, error)
 
 // Errors returned by providers and helpers.
 var (

@@ -12,7 +12,8 @@ Backed by OpenRouter in v1; designed so v2 can plug in direct providers (Anthrop
 
 - **`llm`** — provider-agnostic `Client`, streaming `Event` channel, `Request` shape with cache breakpoints, thinking config, and explicit `*float32` temperature.
 - **`llm/openrouter`** - real SSE streaming, tool-call assembly across fragments, 429/5xx retry at stream-start, `ProviderOrder` routing, and `GenerateImage` for the models OpenRouter serves only on `POST /api/v1/images`.
-- **`llm/codex`** - the Codex backend of a ChatGPT subscription (bills the subscription, not an API key): device-code login, a `TokenSource` that refreshes and hands every rotated login back for persisting, streaming text, image input and structured output. No tools.
+- **`llm/codex`** - the Codex backend of a ChatGPT subscription (bills the subscription, not an API key): device-code login, a `TokenSource` that refreshes and hands every rotated login back for persisting, streaming text, image input and structured output. No tools, no audio input.
+- **`llm.Transcribe`** - speech-to-text over any client that accepts audio input (`llm.Message.Audio`, sent by `llm/openrouter` as `input_audio`), with `llm.AudioFormat` for browser MIME types.
 - **`llm.Request.ResponseFormat`** - structured output (`llm.JSONSchema`), mapped by `llm/openrouter` and `llm/codex`.
 - **`llm/llmtest`** — `StubClient` for scripting multi-turn conversations in your tests.
 - **`tools`** — registry, dispatch, explicit JSON-Schema helpers.
@@ -110,6 +111,31 @@ func generate(ctx context.Context, c llm.Client, req llm.ImageRequest) (llm.Imag
 When streaming the chat path, the same data flows as `llm.EventImage` events.
 In agent runs, `Drain` populates `llm.Message.Images` on the assembled
 assistant message, mirroring how `ToolCalls` are handled.
+
+### Speech-to-text
+
+`llm.Message.Audio` carries audio clips; `llm/openrouter` sends them as
+`input_audio` content parts on both `Stream` and `Complete`. `llm.Transcribe`
+wraps that into one call: default model `google/gemini-3.1-flash-lite` (about
+1 s per clip, verbatim German, English and Italian), temperature 0, and a
+prompt that makes the model mark silence or noise instead of inventing a
+sentence. That case returns `""`.
+
+```go
+format, err := llm.AudioFormat(r.Header.Get("Content-Type")) // "audio/webm;codecs=opus" -> "webm"
+if err != nil {
+    return err
+}
+text, usage, err := llm.Transcribe(ctx, client, llm.TranscribeRequest{
+    Audio:  clip,
+    Format: format,
+    Hint:   "The speaker most likely speaks German. Write amounts as digits.",
+})
+```
+
+Keep example sentences and amounts out of `Hint`: for a silent clip the model
+repeats them as the transcript. `llm/codex` rejects audio with
+`llm.ErrInvalidRequest`.
 
 ### Agent over a writable VFS
 
