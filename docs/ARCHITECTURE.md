@@ -12,6 +12,7 @@ github.com/mxcd/aikido/
 ├── tools/                        # tool registry + dispatch + explicit schema helpers
 ├── vfs/                          # Storage interface (4 methods) + capabilities + path validation
 │   └── memory/                   # in-process Storage implementation
+├── voice/                        # one agent turn with speech in/out, per-sentence TTS, NDJSON handler
 ├── agent/                        # Session-based streaming loop, Locker, History, built-in VFS tools
 │   ├── history/
 │   │   └── memory/               # in-memory History backend
@@ -20,10 +21,11 @@ github.com/mxcd/aikido/
 │   └── retry/                    # internal exponential backoff helper
 └── examples/
     ├── chat-oneshot/             # one-shot completion via llm.Collect
-    └── agent-vfs/                # session over memory VFS with built-in tools
+    ├── agent-vfs/                # session over memory VFS with built-in tools
+    └── voicebot/                 # push-to-talk web page over voice.Handler
 ```
 
-The dependency graph is strict: `llm` knows nothing about `vfs`, `vfs` knows nothing about `agent`, `agent` orchestrates all three plus `tools`. `agent.History` and `agent.Locker` are parallel pluggable interfaces, both shipped with bundled in-memory backends. Nothing depends on `examples`.
+The dependency graph is strict: `llm` knows nothing about `vfs`, `vfs` knows nothing about `agent`, `agent` orchestrates all three plus `tools`, and `voice` sits on top of `agent` and `llm` (ADR-032). `agent.History` and `agent.Locker` are parallel pluggable interfaces, both shipped with bundled in-memory backends. Nothing depends on `examples`.
 
 Cut from v1 (deferred to v1.x or later, per DECISIONS.md):
 

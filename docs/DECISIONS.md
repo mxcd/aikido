@@ -563,3 +563,81 @@ a missing second event rather than as double counting. An abort no longer
 truncates the read, which means the scanner may consume a few more chunks after
 an error; it is bounded by `[DONE]`, EOF, the per-line cap and the caller's
 context, as before.
+
+## ADR-031 - Text-to-speech as an optional `SpeechGenerator` capability
+
+**Date:** 11.10.2026
+**Status:** Accepted
+
+**Context.** OpenRouter serves text-to-speech models (ElevenLabs v4 and v4
+Turbo, OpenAI TTS, Gemini TTS, Voxtral, ...) on `POST /api/v1/audio/speech`,
+an OpenAI audio/speech compatible endpoint: `model`, `input`, `voice`,
+`response_format` (`mp3` or the default `pcm`), `speed`. The 200 body is raw
+audio, not JSON, with the generation id in `X-Generation-Id`. It carries no
+usage or cost, and `GET /api/v1/generation?id=` answers 404 for some seconds
+after the call. Verified live on 11.10.2026 with `elevenlabs/eleven-v4-turbo`
+(voice `sarah`, mp3): 4.6 s of 44.1 kHz mono mp3 for 71 characters in about
+1 s, billed 0.00142 USD, the listed 0.00002 USD per character. The generation
+record reports `streamed: false`, and the endpoint has no `stream` parameter.
+
+**Decision.**
+- `llm.SpeechGenerator` with `Speak(ctx, SpeechRequest) (SpeechResponse, error)`,
+  optional like `ImageGenerator` (ADR-029). `openrouter.Client` and
+  `llmtest.StubClient` implement it.
+- `postJSON` grows a sibling `post` that takes the `Accept` header and returns
+  the response headers; retry and error classification stay shared. A 200
+  whose `Content-Type` is JSON is a provider error, not audio.
+- **No `Usage` on `SpeechResponse`** and no follow-up generation lookup: a field
+  that is always nil misleads, and a lookup that has to poll for seconds does
+  not belong in a call meant for interactive answers. `GenerationID` is
+  returned so a caller can reconcile later; per-turn cost in `voice` is the
+  caller's price per character (ADR-025 keeps prices out of the library).
+- **No `SpeakStream`.** The response arrives in one piece; early playback comes
+  from speaking sentence by sentence, which `voice` does.
+
+**Consequences.** Additive surface: `SpeechRequest`, `SpeechResponse`,
+`SpeechGenerator`, `Client.Speak`, `StubClient.ScriptSpeech` and
+`SpeechRequests`. There is no language field (ElevenLabs detects it from the
+text) and `instructions` is not exposed because the ElevenLabs models ignore
+it; both are one field away if a model needs them.
+
+## ADR-032 - A `voice` package on top of `agent`
+
+**Date:** 11.10.2026
+**Status:** Accepted
+
+**Context.** Every voice app built on aikido (bkv-demo, hub-sandbox, the
+Bathroom Planner) repeats the same glue: transcribe an upload, run the agent,
+turn the reply into speech, stream it to a browser, add the costs. Speaking
+the whole reply after the model finishes adds the full generation time to the
+first audible word.
+
+**Decision.**
+- `voice.Pipeline.Run(ctx, Runner, Input) (<-chan Event, error)` runs one turn
+  for all four combinations of text or audio in and text or speech out.
+  `Runner` is the one method it needs from `*agent.Session`
+  (`RunWithOptions`), so callers can wrap a session.
+- Speech output is synthesized **per sentence while the model writes**: a
+  splitter cuts complete sentences off the text deltas (a 12-rune minimum keeps
+  "Ja." with the next one), a tool call flushes the pending text, synthesis
+  runs with bounded parallelism and one emitter forwards chunks in `Seq`
+  order. A failed chunk is an `EventError` carrying the chunk, not the end of
+  the turn. `Speakable` strips markdown and URLs before synthesis.
+- The spoken reply style is a per-run system prompt suffix, which needed
+  `agent.Session.RunWithOptions` with `RunOptions.SystemSuffix`: it reaches the
+  model for that run only and never History.
+- `Usage` sums transcription, the agent's model calls and speech, the last
+  priced as characters times `Options.SpeechUSDPerChar` (ADR-031).
+- `voice.Handler` is plain `net/http`: NDJSON over POST, JSON or multipart or
+  raw audio in, audio base64 in the lines. The turn runs under
+  `context.WithoutCancel(r.Context())` with its own timeout, and the handler
+  keeps draining after a failed write, so a closed tab still gets its reply
+  into History.
+- `llm.Vocabulary` (prompt biasing plus deterministic correction) lives in
+  `llm` next to `Transcribe`, not in `voice`, so a plain transcription
+  endpoint gets it too.
+
+**Consequences.** `voice` depends on `agent` and `llm` and nothing depends on
+it. The NDJSON shape is part of the public surface (documented on `Handler`).
+Not covered: barge-in, realtime streaming STT, per-request voice or model
+override (build a second Pipeline), abbreviation-aware sentence splitting.

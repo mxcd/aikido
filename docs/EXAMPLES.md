@@ -1,6 +1,6 @@
 # Examples
 
-Two runnable examples covering the v1 surface. Each lives under `examples/` in the repo and compiles in CI. Code blocks below show the essential shape; see the corresponding `examples/<name>/main.go` for the full file once W2/W5/W6 land.
+Runnable examples covering the v1 surface. Each lives under `examples/` in the repo and compiles in CI. Code blocks below show the essential shape; see the corresponding `examples/<name>/main.go` for the full file once W2/W5/W6 land.
 
 The third example originally planned (`examples/notes-consolidate/`) was deferred to v1.x with the rest of the `notes` package (ADR-015). The note-then-consolidate pattern is documented as a hand-rollable recipe in `PATTERNS.md`.
 
@@ -142,6 +142,45 @@ func main() {
 go run ./examples/agent-vfs
 ```
 
+## 3. Voicebot: push-to-talk over `voice.Handler`
+
+**File:** `examples/voicebot/main.go` (+ `index.html`, `knowledge/*.md`)
+
+**What it shows:** the chatbot shape with a voice. An agent over an embedded,
+read-only German bathroom-planning corpus, a `voice.Pipeline` with an
+`llm.Vocabulary` for the corpus' brand and article numbers, and
+`voice.NewHandler` mounted on the standard mux. The page is one embedded HTML
+file with no build step: hold the button to record (MediaRecorder), or type;
+pick one of the four modes (voice or text in, speech or text out); the reply
+streams in as text and the speech chunks play in order while it is still
+being written. The transcript bubble shows the raw recognition on hover.
+
+```go
+pipeline, _ := voice.New(&voice.Options{
+    Transcriber:      client,
+    Vocabulary:       vocabulary,
+    Speech:           client,
+    Voice:            "sarah",
+    SpeechUSDPerChar: 0.00002,
+    SpokenStyle:      voice.DefaultSpokenStyle,
+})
+turn, _ := voice.NewHandler(&voice.HandlerOptions{
+    Pipeline: pipeline,
+    Session:  func(*http.Request) (voice.Runner, error) { return session, nil },
+})
+mux.Handle("POST /api/turn", turn)
+```
+
+**Run:**
+
+```sh
+export OPENROUTER_API_KEY=sk-or-...
+go run ./examples/voicebot   # then open http://localhost:8080 (ADDR overrides)
+```
+
+One conversation per process. A real app resolves the session per request
+(user, tenant, conversation id) in `HandlerOptions.Session`.
+
 ## Recipe — `RunWithMessages` + `Drain` for caller-managed history
 
 When the caller maintains their own message log (trimming, branched conversations, agent-as-subroutine), they use `Session.RunWithMessages` and `agent.Drain`. The library prepends the system prompt from `SessionOptions.SystemPrompt`; the caller hands in their pruned `[]llm.Message` (excluding the system prompt) and gets back the produced messages for storing.
@@ -187,7 +226,7 @@ Two concurrent requests for the same session ID build two distinct `*Session` va
 
 ## What is intentionally not in `examples/`
 
-- No HTTP server example. aikido is a library; HTTP wrapping is the caller's concern.
+- No general HTTP server example. Only `voice` ships a handler (NDJSON turns, see `voicebot`); wrapping chat or agent runs in HTTP stays the caller's concern.
 - No image-gen example. Image generation is v2.
 - No Ent-backed VFS example. Wiring Ent to `vfs.Storage` is project-specific; documented in [v2/SCOPE.md](v2/SCOPE.md) when the reference impl lands.
 - No notes-consolidation example. Pattern recipe lives in [PATTERNS.md](PATTERNS.md); first-class `notes` package deferred to v1.x (ADR-015).

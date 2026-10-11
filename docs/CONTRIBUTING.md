@@ -105,7 +105,7 @@ Every load-bearing decision is in [DECISIONS.md](DECISIONS.md). Patterns and ref
 
 - New providers in v1. Wait for the v1 release; new providers (`llm/anthropic`, `llm/openai`) are explicitly v2.
 - A CLI binary. v2.
-- Image, audio, or queue packages. v2.
+- Queue packages. v2. (Images, audio and `voice` landed in v0.x, see ADR-029, ADR-031, ADR-032.)
 - A `vfs/postgres` or `agent/history/postgres` reference impl. v1 keeps the bundled backends to memory only — see [DECISIONS.md ADR-008](DECISIONS.md), [ADR-014](DECISIONS.md).
 - `agent/locker/redis`. Ships in v1.1 — see [DECISIONS.md ADR-024](DECISIONS.md). For v1, multi-replica callers implement `agent.Locker` themselves.
 - An `llm.Catalog` revival. Dropped in v1; per-provider catalogs are v2 — see [ADR-025](DECISIONS.md).

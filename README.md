@@ -13,7 +13,9 @@ Backed by OpenRouter in v1; designed so v2 can plug in direct providers (Anthrop
 - **`llm`** — provider-agnostic `Client`, streaming `Event` channel, `Request` shape with cache breakpoints, thinking config, and explicit `*float32` temperature.
 - **`llm/openrouter`** - real SSE streaming, tool-call assembly across fragments, 429/5xx retry at stream-start, `ProviderOrder` routing, and `GenerateImage` for the models OpenRouter serves only on `POST /api/v1/images`.
 - **`llm/codex`** - the Codex backend of a ChatGPT subscription (bills the subscription, not an API key): device-code login, a `TokenSource` that refreshes and hands every rotated login back for persisting, streaming text, image input and structured output. No tools, no audio input.
-- **`llm.Transcribe`** - speech-to-text over any client that accepts audio input (`llm.Message.Audio`, sent by `llm/openrouter` as `input_audio`), with `llm.AudioFormat` for browser MIME types.
+- **`llm.Transcribe`** - speech-to-text over any client that accepts audio input (`llm.Message.Audio`, sent by `llm/openrouter` as `input_audio`), with `llm.AudioFormat` for browser MIME types and an `llm.Vocabulary` of expected terms that biases the prompt and corrects the transcript.
+- **`llm.SpeechGenerator`** - text-to-speech, implemented by `llm/openrouter` on `POST /api/v1/audio/speech` (ElevenLabs, OpenAI, Gemini and other TTS models).
+- **`voice`** - one agent turn with speech in and/or out: transcription, per-sentence speech synthesis while the model still writes, typed events, cost over all stages, and an NDJSON `net/http` handler.
 - **`llm.Request.ResponseFormat`** - structured output (`llm.JSONSchema`), mapped by `llm/openrouter` and `llm/codex`.
 - **`llm/llmtest`** — `StubClient` for scripting multi-turn conversations in your tests.
 - **`tools`** — registry, dispatch, explicit JSON-Schema helpers.
@@ -137,6 +139,89 @@ Keep example sentences and amounts out of `Hint`: for a silent clip the model
 repeats them as the transcript. `llm/codex` rejects audio with
 `llm.ErrInvalidRequest`.
 
+`TranscribeRequest.Vocabulary` fixes the words a speech model gets wrong:
+brand names, article numbers, trade words. `Terms` go into the prompt as
+"spell exactly like this" (capped at 200 terms / 3000 bytes), then the
+transcript is corrected deterministically: `Replacements` (heard variant to
+canonical term, case-insensitive, whole word, longest first), exact term
+matches with spaces and case ignored, and with `Fuzzy` a conservative
+edit-distance match that never touches words under 4 letters.
+`TranscribeDetailed` returns the raw and the corrected text.
+
+```go
+vocab := &llm.Vocabulary{
+    Terms:        []string{"PFEIFFER & MAY", "LIV60G", "Waschtisch", "Duschtasse"},
+    Replacements: map[string]string{"pfeifer und mai": "PFEIFFER & MAY"},
+    Fuzzy:        true,
+}
+t, err := llm.TranscribeDetailed(ctx, client, llm.TranscribeRequest{Audio: clip, Format: format, Vocabulary: vocab})
+// t.Raw  "Ist die Duschtase Liv 60 G von Pfeifer und Mai lieferbar?"
+// t.Text "Ist die Duschtasse LIV60G von PFEIFFER & MAY lieferbar?"
+```
+
+A reply that is only a short bracketed phrase counts as no speech, so a
+German hint answering `[keine Sprache]` returns `""` as well.
+
+### Text-to-speech
+
+`llm/openrouter` implements the optional `llm.SpeechGenerator` capability on
+`POST /api/v1/audio/speech`. The response is the raw audio in one piece
+(`mp3` as `audio/mpeg`, or the default `pcm`, 16-bit little-endian mono);
+OpenRouter does not stream chunks of it, so speak sentence by sentence for
+early playback (the `voice` package does).
+
+```go
+resp, err := client.Speak(ctx, llm.SpeechRequest{
+    Model:  "elevenlabs/eleven-v4-turbo",
+    Input:  "Die Dusche kommt an die Fensterwand.",
+    Voice:  "sarah", // george, sarah, adam, alice, bella, brian, daniel, laura, ...
+    Format: "mp3",
+})
+// resp.Audio, resp.ContentType ("audio/mpeg"), resp.GenerationID
+```
+
+OpenRouter reports no usage on speech responses, so `SpeechResponse` has no
+`Usage`; the price is per input character (eleven-v4-turbo: 0.00002 USD,
+about 0.002 USD for a two-sentence answer) and shows up on
+`GET /api/v1/generation?id=<GenerationID>` some seconds later.
+
+### Voice turns
+
+`voice.Pipeline` wraps one agent turn with speech: text or audio in, text or
+text plus speech out, all four combinations through one `Run`.
+
+```go
+pipeline, _ := voice.New(&voice.Options{
+    Transcriber:      client,           // any llm.Client for llm.Transcribe
+    Vocabulary:       vocab,
+    Speech:           client,           // any llm.SpeechGenerator
+    Voice:            "sarah",          // model defaults to elevenlabs/eleven-v4-turbo, mp3
+    SpeechUSDPerChar: 0.00002,
+    SpokenStyle:      voice.DefaultSpokenStyle, // short plain answers for speech turns
+})
+events, err := pipeline.Run(ctx, session, voice.Input{
+    Audio: clip, ContentType: "audio/webm;codecs=opus", Language: "de", Output: voice.OutputSpeech,
+})
+for ev := range events {
+    switch ev.Kind {
+    case voice.EventTranscript: // ev.Text (corrected), ev.Raw
+    case voice.EventText:       // reply delta
+    case voice.EventSpeech:     // ev.Speech.Seq, .Audio, .ContentType, in Seq order
+    case voice.EventError:      // ev.Err; with ev.Speech set only that chunk failed
+    case voice.EventDone:       // ev.EndReason, ev.Usage.CostUSD over STT + LLM + TTS
+    }
+}
+```
+
+Speech is synthesized per sentence as soon as one is complete, in parallel
+(`SpeechConcurrency`, default 2), and emitted in order, so playback starts
+while the model is still writing. `voice.Speakable` strips markdown, code and
+URLs before synthesis. `voice.NewHandler` serves the pipeline over plain
+`net/http` as NDJSON (one JSON event per line, audio base64), accepting JSON,
+multipart or a raw audio body, and runs the turn under
+`context.WithoutCancel` so a closed tab does not lose it. Under Gin:
+`r.POST("/voice", gin.WrapH(handler))`.
+
 ### Agent over a writable VFS
 
 ```go
@@ -200,7 +285,7 @@ res, _ := client.Complete(ctx, llm.Request{Model: "gpt-5.5", Messages: msgs, Res
 
 Keep one `TokenSource` per login and process, and do not share a login with the Codex CLI (`codex.ParseAuthJSON` reads its `auth.json`): a refresh token used twice revokes the login, surfacing as `codex.ErrReauthRequired`.
 
-Four runnable examples under [`examples/`](examples/): `chat-oneshot`, `image-generation`, `agent-vfs`, `chatbot`.
+Five runnable examples under [`examples/`](examples/): `chat-oneshot`, `image-generation`, `agent-vfs`, `chatbot`, `voicebot` (push-to-talk web page over `voice.Handler`).
 
 ## CLI
 

@@ -259,6 +259,53 @@ type TranscribeRequest struct {
 // temperature 0. A clip without intelligible speech returns "", not an error.
 func Transcribe(ctx context.Context, c Client, req TranscribeRequest) (string, *Usage, error)
 
+// TranscribeDetailed is Transcribe returning raw and corrected text.
+func TranscribeDetailed(ctx context.Context, c Client, req TranscribeRequest) (Transcription, error)
+
+// Transcription: Text is Raw after Vocabulary.Correct; both "" for no speech.
+type Transcription struct {
+    Text  string
+    Raw   string
+    Usage *Usage
+}
+
+// TranscribeRequest also carries Vocabulary *Vocabulary.
+
+// Vocabulary biases the transcription prompt with Terms (capped at
+// MaxVocabularyPromptTerms / MaxVocabularyPromptBytes) and corrects the
+// transcript: Replacements (heard -> canonical, case-insensitive, whole word,
+// longest first), exact term matches ignoring spaces and case, and with
+// Fuzzy an edit-distance match for terms of 6+ letters that never touches
+// words under 4 letters.
+type Vocabulary struct {
+    Terms        []string
+    Replacements map[string]string
+    Fuzzy        bool
+}
+func (v *Vocabulary) Correct(text string) string
+
+// SpeechRequest is one text-to-speech call. Format "mp3" or "pcm".
+type SpeechRequest struct {
+    Model  string
+    Input  string
+    Voice  string
+    Format string
+    Speed  *float32
+}
+
+// SpeechResponse: the raw audio, its Content-Type and the provider's
+// generation id. No Usage: OpenRouter reports none for speech (ADR-031).
+type SpeechResponse struct {
+    Audio        []byte
+    ContentType  string
+    GenerationID string
+}
+
+// SpeechGenerator is an optional capability (ADR-031); callers type-assert.
+type SpeechGenerator interface {
+    Speak(ctx context.Context, req SpeechRequest) (SpeechResponse, error)
+}
+
 // Errors returned by providers and helpers.
 var (
     ErrAuth           error // wrap when provider returns 401/403
@@ -304,8 +351,9 @@ type Client struct{ /* ... */ }
 func NewClient(opts *Options) (*Client, error)
 
 var (
-    _ llm.Client         = (*Client)(nil)
-    _ llm.ImageGenerator = (*Client)(nil)
+    _ llm.Client          = (*Client)(nil)
+    _ llm.ImageGenerator  = (*Client)(nil)
+    _ llm.SpeechGenerator = (*Client)(nil)
 )
 
 // Stream sends one request to OpenRouter and yields events as they arrive.
@@ -320,6 +368,10 @@ func (c *Client) Complete(ctx context.Context, req llm.Request) (llm.Response, e
 // endpoint serving models like openai/gpt-image-2.5-flare. Models that answer
 // on chat completions should keep using Complete.
 func (c *Client) GenerateImage(ctx context.Context, req llm.ImageRequest) (llm.ImageResponse, error)
+
+// Speak synthesizes speech through POST /api/v1/audio/speech. The audio comes
+// back in one piece; Complete's retry and error classification apply.
+func (c *Client) Speak(ctx context.Context, req llm.SpeechRequest) (llm.SpeechResponse, error)
 ```
 
 ---
@@ -374,9 +426,19 @@ func (s *StubClient) GenerateImage(ctx context.Context, req llm.ImageRequest) (l
 // ImageRequests returns every llm.ImageRequest the stub has been called with, in order.
 func (s *StubClient) ImageRequests() []llm.ImageRequest
 
+// SpeechScript is one scripted Speak outcome; same rules as ImageScript.
+type SpeechScript struct {
+    Response llm.SpeechResponse
+    Err      error
+}
+func (s *StubClient) ScriptSpeech(scripts ...SpeechScript)
+func (s *StubClient) Speak(ctx context.Context, req llm.SpeechRequest) (llm.SpeechResponse, error)
+func (s *StubClient) SpeechRequests() []llm.SpeechRequest
+
 var (
-    _ llm.Client         = (*StubClient)(nil)
-    _ llm.ImageGenerator = (*StubClient)(nil)
+    _ llm.Client          = (*StubClient)(nil)
+    _ llm.ImageGenerator  = (*StubClient)(nil)
+    _ llm.SpeechGenerator = (*StubClient)(nil)
 )
 
 // ErrStubExhausted is returned when Stream is called with no remaining scripts.
@@ -705,6 +767,15 @@ type Event struct {
 // and the durable transcript stays consistent.
 func (s *Session) Run(ctx context.Context, userText string) (<-chan Event, error)
 
+// RunOptions tune one Run. SystemSuffix is appended to the system prompt for
+// this run only and never written to History.
+type RunOptions struct {
+    SystemSuffix string
+}
+
+// RunWithOptions is Run with per-run options; nil opts is Run.
+func (s *Session) RunWithOptions(ctx context.Context, userText string, opts *RunOptions) (<-chan Event, error)
+
 // RunWithMessages is the lower-level escape hatch for callers that maintain
 // their own history shape (trimming, branched conversations, agent-as-subroutine).
 // The history slice is the conversation so far, excluding the system prompt
@@ -764,6 +835,115 @@ The conformance suite for `History` lives in `agent/history.RunConformance(t, fa
 
 ---
 
+## Package `voice`
+
+One agent turn with speech in and/or out (ADR-032). No web framework dependency.
+
+```go
+package voice
+
+const (
+    DefaultSpeechModel = "elevenlabs/eleven-v4-turbo"
+    DefaultVoice       = "sarah"
+    DefaultFormat      = "mp3"
+    EndReasonNoSpeech  = "no_speech"
+)
+const DefaultSpokenStyle = "Your reply will be read aloud ..." // short plain answers
+
+type Output string
+const (
+    OutputText   Output = "text"
+    OutputSpeech Output = "speech"
+)
+
+// Runner runs one agent turn. *agent.Session implements it.
+type Runner interface {
+    RunWithOptions(ctx context.Context, userText string, opts *agent.RunOptions) (<-chan agent.Event, error)
+}
+
+type Options struct {
+    Transcriber       llm.Client          // required for audio input
+    TranscribeModel   string              // default llm.DefaultTranscribeModel
+    Vocabulary        *llm.Vocabulary
+    Speech            llm.SpeechGenerator // required for speech output
+    SpeechModel       string              // default DefaultSpeechModel
+    Voice             string              // default DefaultVoice
+    Format            string              // default "mp3"
+    Speed             *float32
+    SpeechUSDPerChar  float64             // prices Usage.SpeechCostUSD
+    SpeechConcurrency int                 // default 2
+    SpokenStyle       string              // system suffix for speech turns, e.g. DefaultSpokenStyle
+}
+
+func New(opts *Options) (*Pipeline, error)
+
+type Input struct {
+    Text        string
+    Audio       []byte
+    ContentType string // MediaRecorder MIME type
+    Language    string // transcription hint, "de"
+    Output      Output // default OutputText
+}
+
+// Run starts one turn; invalid input fails up front with llm.ErrInvalidRequest.
+// The caller drains the channel; it closes after EventDone.
+func (p *Pipeline) Run(ctx context.Context, r Runner, in Input) (<-chan Event, error)
+
+type EventKind string
+const (
+    EventTranscript EventKind = "transcript" // Text (corrected), Raw; first, audio input only
+    EventText       EventKind = "text"       // reply delta
+    EventToolCall   EventKind = "tool_call"
+    EventToolResult EventKind = "tool_result"
+    EventSpeech     EventKind = "speech"     // Speech, in Seq order
+    EventError      EventKind = "error"      // Err; with Speech set only that chunk failed
+    EventDone       EventKind = "done"       // EndReason, Usage
+)
+
+type Event struct {
+    Kind       EventKind
+    Text       string
+    Raw        string
+    ToolCall   *llm.ToolCall
+    ToolResult *agent.ToolResult
+    Speech     *SpeechChunk
+    Err        error
+    EndReason  string
+    Usage      *Usage
+}
+
+type SpeechChunk struct {
+    Seq          int
+    Text         string // what was spoken, after Speakable
+    Audio        []byte
+    ContentType  string
+    GenerationID string
+}
+
+type Usage struct {
+    Transcription *llm.Usage
+    LLM           llm.Usage // summed over the agent's calls
+    SpeechChars   int
+    SpeechCostUSD float64   // SpeechChars * SpeechUSDPerChar
+    CostUSD       float64   // total
+}
+
+// Speakable strips markdown, code and URLs for text-to-speech.
+func Speakable(s string) string
+
+// Handler serves POST turns as NDJSON; see its godoc for the line shapes.
+type HandlerOptions struct {
+    Pipeline      *Pipeline
+    Session       func(r *http.Request) (Runner, error)
+    MaxAudioBytes int64         // default 8 MiB, 413 above
+    Timeout       time.Duration // default 5 min, the detached turn's cap
+}
+func NewHandler(opts *HandlerOptions) (*Handler, error)
+func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request)
+```
+
+---
+
 ## What is intentionally not in v1
 
 Each has its deferral rationale in [DECISIONS.md](../DECISIONS.md):
@@ -777,7 +957,7 @@ Each has its deferral rationale in [DECISIONS.md](../DECISIONS.md):
 - `llm.Catalog`, `llm.FindModel`, `llm.Model`, `llm.ErrUnknownModel` — no v1 catalog (ADR-025). Token / cost tracking infrastructure is a v1.x or v2 concern, likely per-provider.
 - `agent/locker/redis` — Redis-backed Locker (ADR-024). Ships in v1.1 with an abstract `Client` interface so aikido does not import a Redis client library. Multi-replica callers can implement `agent.Locker` themselves before v1.1 lands.
 - `cmd/aikido` — CLI binary (ADR-010). Joins v2.
-- `image`, `audio/stt`, `audio/tts` — modalities. Joins v2.
+- Realtime (streaming) audio in or out - OpenRouter's speech and transcription endpoints are request/response (ADR-031).
 - `llm/anthropic`, `llm/openai` — direct providers. Joins v2.
 - `vfs/local`, `vfs/postgres` — additional storage backends. v1 ships memory only (ADR-008).
 - Structured-event logging contract on `Logger` — `Logger` is plumbed but its emission contract is intentionally not specified in v1.0 (lean stance). Real `OnEvent` hooks and a stable slog event vocabulary land in v1.x once a real caller proves the need.
