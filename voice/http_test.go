@@ -14,8 +14,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mxcd/aikido/agent"
+	"github.com/mxcd/aikido/agent/history/memory"
 	"github.com/mxcd/aikido/llm"
 	"github.com/mxcd/aikido/llm/llmtest"
+	"github.com/mxcd/aikido/tools"
 )
 
 func newTestHandler(t *testing.T, stt, chat llm.Client, maxBytes int64) (*Handler, func() []llm.Message) {
@@ -191,4 +194,79 @@ func TestHandler_ClientDisconnectDoesNotCancelTheTurn(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatal("turn did not complete after the client disconnected")
+}
+
+func TestHandler_TimeoutStillWritesDone(t *testing.T) {
+	t.Parallel()
+	p, _ := New(&Options{Speech: &fakeSpeech{}})
+	session, _ := newSession(t, &gatedClient{first: "Die Dusche ", gate: make(chan struct{})})
+	h, _ := NewHandler(&HandlerOptions{
+		Pipeline: p,
+		Session:  func(*http.Request) (Runner, error) { return session, nil },
+		Timeout:  100 * time.Millisecond,
+	})
+	req := httptest.NewRequest(http.MethodPost, "/voice", strings.NewReader(`{"text":"Hallo"}`))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	lines := readLines(t, rec.Body)
+	if last := lines[len(lines)-1]; last["type"] != "done" || last["end_reason"] != "timeout" || last["usage"] == nil {
+		t.Fatalf("last line = %v", last)
+	}
+}
+
+func TestHandler_ToolResultContentAndExtraFields(t *testing.T) {
+	t.Parallel()
+	reg := tools.NewRegistry()
+	_ = reg.Register(llm.ToolDef{Name: "highlight", Parameters: tools.Object(map[string]any{})},
+		func(context.Context, json.RawMessage, tools.Env) (tools.Result, error) {
+			return tools.Result{Content: map[string]string{"ui": "highlight:shower"}}, nil
+		})
+	chat := llmtest.NewStubClient(
+		llmtest.TurnScript{Events: []llm.Event{
+			{Kind: llm.EventToolCall, Tool: &llm.ToolCall{ID: "c1", Name: "highlight", Arguments: `{}`}},
+			{Kind: llm.EventEnd},
+		}},
+		replyTurn(0, "Da ist die Dusche."),
+	)
+	session, err := agent.NewSession(&agent.SessionOptions{
+		ID: "voice-test", Client: chat, History: memory.NewHistory(), Locker: agent.NewLocalLocker(),
+		Model: "test/model", Tools: reg,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, _ := New(&Options{Speech: &fakeSpeech{}})
+	var route string
+	h, _ := NewHandler(&HandlerOptions{
+		Pipeline: p,
+		Session: func(r *http.Request) (Runner, error) {
+			var extra struct {
+				Route string `json:"route"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&extra); err != nil {
+				return nil, err
+			}
+			route = extra.Route
+			return session, nil
+		},
+		ToolResult: func(res agent.ToolResult) any { return res.Content },
+	})
+	req := httptest.NewRequest(http.MethodPost, "/voice", strings.NewReader(`{"text":"Wo ist die Dusche?","route":"/plan/3"}`))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if route != "/plan/3" {
+		t.Errorf("route = %q", route)
+	}
+	for _, l := range readLines(t, rec.Body) {
+		if l["type"] == "tool_result" {
+			content, _ := l["tool"].(map[string]any)["content"].(map[string]any)
+			if content["ui"] != "highlight:shower" {
+				t.Fatalf("tool_result line = %v", l)
+			}
+			return
+		}
+	}
+	t.Fatal("no tool_result line")
 }

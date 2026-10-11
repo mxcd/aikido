@@ -633,6 +633,15 @@ first audible word.
   `context.WithoutCancel(r.Context())` with its own timeout, and the handler
   keeps draining after a failed write, so a closed tab still gets its reply
   into History.
+- `Run` always delivers exactly one terminal `EventDone` with the usage
+  accrued so far, also once `ctx` is over (`EndReason` cancelled or timeout
+  in place of stop or error), so callers keep the cost of a timed-out turn.
+  Other events are dropped after `ctx` ends; with a full buffer the done
+  event is given up after a 5 s grace instead of blocking forever (v0.6.2).
+- `HandlerOptions.ToolResult` opts in to forwarding tool result content on
+  `tool_result` lines (private by default); the handler restores a JSON body
+  so `Session` can decode request fields beyond text/output/language
+  (v0.6.2).
 - `llm.Vocabulary` (prompt biasing plus deterministic correction) lives in
   `llm` next to `Transcribe`, not in `voice`, so a plain transcription
   endpoint gets it too.

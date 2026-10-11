@@ -222,6 +222,13 @@ multipart or a raw audio body, and runs the turn under
 `context.WithoutCancel` so a closed tab does not lose it. Under Gin:
 `r.POST("/voice", gin.WrapH(handler))`.
 
+Every `Run` ends with exactly one `EventDone` carrying the usage so far, also
+when `ctx` is cancelled or past its deadline (`EndReason` `cancelled` or
+`timeout`), so a timed-out turn still books its cost; a consumer that stopped
+reading does not block it forever. `HandlerOptions.ToolResult` forwards chosen
+tool result content as `content` on `tool_result` lines, and the `Session`
+factory can decode extra JSON request fields from `r.Body` again.
+
 ### Agent over a writable VFS
 
 ```go

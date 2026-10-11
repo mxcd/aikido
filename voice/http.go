@@ -1,6 +1,7 @@
 package voice
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -11,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mxcd/aikido/agent"
 	"github.com/mxcd/aikido/llm"
 )
 
@@ -19,8 +21,16 @@ type HandlerOptions struct {
 	Pipeline *Pipeline
 	// Session resolves the agent session for a request (auth, tenant,
 	// conversation id). An error answers 400 with its message; check auth
-	// in a middleware in front for a 401.
+	// in a middleware in front for a 401. Extra request fields are there
+	// to read: a JSON body can be decoded again from r.Body (the handler
+	// restores it), multipart fields come from r.FormValue, query
+	// parameters from r.URL.
 	Session func(r *http.Request) (Runner, error)
+	// ToolResult, when set, picks what of a tool result reaches the client:
+	// a non-nil return is sent as the "content" of the tool_result line.
+	// Nil (the default, and the return for results to keep private) sends
+	// no content.
+	ToolResult func(res agent.ToolResult) any
 	// MaxAudioBytes caps the upload. Default 8 MiB; larger answers 413.
 	MaxAudioBytes int64
 	// Timeout caps the turn, which runs detached from the request context so
@@ -42,10 +52,13 @@ type HandlerOptions struct {
 //	{"type":"transcript","text":"...","raw":"..."}
 //	{"type":"text","text":"..."}
 //	{"type":"tool_call","tool":{"id":"...","name":"...","arguments":"..."}}
-//	{"type":"tool_result","tool":{"id":"...","name":"...","ok":true,"error":""}}
+//	{"type":"tool_result","tool":{"id":"...","name":"...","ok":true,"error":"","content":...}}
 //	{"type":"speech","seq":0,"text":"...","content_type":"audio/mpeg","audio":"<base64>"}
 //	{"type":"error","error":"...","seq":2}
 //	{"type":"done","end_reason":"stop","usage":{"cost_usd":0.0031,...}}
+//
+// The done line is always the last one, also for a turn that hit Timeout
+// (end_reason "timeout"), as long as the client is still connected.
 //
 // Input errors answer 4xx with a JSON {"error": "..."} body before any line.
 type Handler struct {
@@ -73,6 +86,7 @@ type wireTool struct {
 	Arguments string `json:"arguments,omitempty"`
 	OK        *bool  `json:"ok,omitempty"`
 	Error     string `json:"error,omitempty"`
+	Content   any    `json:"content,omitempty"`
 }
 
 type wireUsage struct {
@@ -98,7 +112,7 @@ type wireEvent struct {
 	Usage       *wireUsage `json:"usage,omitempty"`
 }
 
-func toWire(ev Event) wireEvent {
+func (h *Handler) toWire(ev Event) wireEvent {
 	w := wireEvent{Type: ev.Kind, Text: ev.Text, Raw: ev.Raw, EndReason: ev.EndReason}
 	if ev.Err != nil {
 		w.Error = ev.Err.Error()
@@ -109,6 +123,9 @@ func toWire(ev Event) wireEvent {
 	if r := ev.ToolResult; r != nil {
 		ok := r.OK
 		w.Tool = &wireTool{ID: r.CallID, Name: r.Name, OK: &ok, Error: r.Error}
+		if h.opts.ToolResult != nil {
+			w.Tool.Content = h.opts.ToolResult(*r)
+		}
 	}
 	if s := ev.Speech; s != nil {
 		seq := s.Seq
@@ -181,7 +198,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if gone {
 			continue // keep draining so the turn completes
 		}
-		if enc.Encode(toWire(ev)) != nil || rc.Flush() != nil {
+		if enc.Encode(h.toWire(ev)) != nil || rc.Flush() != nil {
 			gone = true
 		}
 	}
@@ -206,9 +223,14 @@ func (h *Handler) readInput(w http.ResponseWriter, r *http.Request) (Input, int,
 			Output   Output `json:"output"`
 			Language string `json:"language"`
 		}
-		if err := json.NewDecoder(body).Decode(&req); err != nil {
-			return tooLarge(fmt.Errorf("invalid JSON: %w", err))
+		raw, err := io.ReadAll(body)
+		if err != nil {
+			return tooLarge(err)
 		}
+		if err := json.Unmarshal(raw, &req); err != nil {
+			return Input{}, http.StatusBadRequest, fmt.Errorf("invalid JSON: %w", err)
+		}
+		r.Body = io.NopCloser(bytes.NewReader(raw))
 		in = Input{Text: req.Text, Output: req.Output, Language: req.Language}
 	case mt == "multipart/form-data":
 		r.Body = body
