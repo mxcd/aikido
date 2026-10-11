@@ -211,16 +211,25 @@ func jsonUnmarshalLenient(b []byte, v any) error {
 // read and closed before the next attempt. Only 429 and 5xx retry, per
 // retryPolicy.
 func (c *Client) postJSON(ctx context.Context, path string, body []byte) ([]byte, error) {
-	var raw []byte
+	raw, _, err := c.post(ctx, path, body, "application/json")
+	return raw, err
+}
+
+// post is postJSON with a caller-chosen Accept header that also returns the
+// response headers, for endpoints whose 200 body is not JSON (speech).
+func (c *Client) post(ctx context.Context, path string, body []byte, accept string) ([]byte, http.Header, error) {
+	var (
+		raw    []byte
+		header http.Header
+	)
 	err := retry.Do(ctx, retryPolicy(), func(_ int) error {
 		httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+path, bytes.NewReader(body))
 		if err != nil {
 			return fmt.Errorf("openrouter: build http request: %w", err)
 		}
 		c.setHeaders(httpReq)
-		// Non-streaming endpoints return JSON; override the SSE Accept that
-		// setHeaders writes for Stream.
-		httpReq.Header.Set("Accept", "application/json")
+		// Override the SSE Accept that setHeaders writes for Stream.
+		httpReq.Header.Set("Accept", accept)
 
 		r, err := c.httpClient.Do(httpReq)
 		if err != nil {
@@ -237,10 +246,11 @@ func (c *Client) postJSON(ctx context.Context, path string, body []byte) ([]byte
 			return fmt.Errorf("openrouter: read body: %w", llm.ErrServerError)
 		}
 		raw = buf
+		header = r.Header
 		return nil
 	})
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return raw, nil
+	return raw, header, nil
 }

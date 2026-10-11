@@ -32,8 +32,15 @@ type ImageScript struct {
 	Err      error
 }
 
+// SpeechScript is one scripted Speak outcome. Err short-circuits the call;
+// otherwise Response is returned verbatim.
+type SpeechScript struct {
+	Response llm.SpeechResponse
+	Err      error
+}
+
 // StubClient is a scriptable llm.Client that also implements the optional
-// llm.ImageGenerator capability.
+// llm.ImageGenerator and llm.SpeechGenerator capabilities.
 type StubClient struct {
 	mu            sync.Mutex
 	turns         []TurnScript
@@ -42,11 +49,15 @@ type StubClient struct {
 	images        []ImageScript
 	imageCursor   int
 	imageRequests []llm.ImageRequest
+	speech        []SpeechScript
+	speechCursor  int
+	speechReqs    []llm.SpeechRequest
 }
 
 var (
-	_ llm.Client         = (*StubClient)(nil)
-	_ llm.ImageGenerator = (*StubClient)(nil)
+	_ llm.Client          = (*StubClient)(nil)
+	_ llm.ImageGenerator  = (*StubClient)(nil)
+	_ llm.SpeechGenerator = (*StubClient)(nil)
 )
 
 // NewStubClient returns a StubClient that plays the given turn scripts in order.
@@ -173,5 +184,36 @@ func (s *StubClient) GenerateImage(_ context.Context, req llm.ImageRequest) (llm
 	script := s.images[s.imageCursor]
 	s.imageCursor++
 	s.imageRequests = append(s.imageRequests, req)
+	return script.Response, script.Err
+}
+
+// ScriptSpeech appends speech scripts consumed by Speak in order.
+func (s *StubClient) ScriptSpeech(scripts ...SpeechScript) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.speech = append(s.speech, scripts...)
+}
+
+// SpeechRequests returns a snapshot of every llm.SpeechRequest the stub has
+// been called with, in order.
+func (s *StubClient) SpeechRequests() []llm.SpeechRequest {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]llm.SpeechRequest, len(s.speechReqs))
+	copy(out, s.speechReqs)
+	return out
+}
+
+// Speak consumes one SpeechScript. Returns ErrStubExhausted when no speech
+// scripts remain.
+func (s *StubClient) Speak(_ context.Context, req llm.SpeechRequest) (llm.SpeechResponse, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.speechCursor >= len(s.speech) {
+		return llm.SpeechResponse{}, ErrStubExhausted
+	}
+	script := s.speech[s.speechCursor]
+	s.speechCursor++
+	s.speechReqs = append(s.speechReqs, req)
 	return script.Response, script.Err
 }

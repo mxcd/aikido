@@ -422,3 +422,13 @@ type imagesDatum struct {
 	URL       string `json:"url,omitempty"`
 	MediaType string `json:"media_type,omitempty"`
 }
+
+// speechRequest is the POST /audio/speech body. The 200 response is raw audio,
+// not JSON.
+type speechRequest struct {
+	Model          string   `json:"model"`
+	Input          string   `json:"input"`
+	Voice          string   `json:"voice,omitempty"`
+	ResponseFormat string   `json:"response_format,omitempty"`
+	Speed          *float32 `json:"speed,omitempty"`
+}

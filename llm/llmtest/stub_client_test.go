@@ -89,3 +89,26 @@ func TestStubClient_GenerateImage_ScriptsAndRecords(t *testing.T) {
 		t.Errorf("first request = %+v", reqs[0])
 	}
 }
+
+func TestStubClient_Speak_ScriptsAndRecords(t *testing.T) {
+	stub := NewStubClient()
+	boom := errors.New("provider blew up")
+	stub.ScriptSpeech(
+		SpeechScript{Response: llm.SpeechResponse{Audio: []byte("mp3"), ContentType: "audio/mpeg"}},
+		SpeechScript{Err: boom},
+	)
+
+	got, err := stub.Speak(context.Background(), llm.SpeechRequest{Model: "elevenlabs/eleven-v4-turbo", Input: "Hallo"})
+	if err != nil || string(got.Audio) != "mp3" || got.ContentType != "audio/mpeg" {
+		t.Fatalf("Speak = %+v, %v", got, err)
+	}
+	if _, err := stub.Speak(context.Background(), llm.SpeechRequest{}); !errors.Is(err, boom) {
+		t.Errorf("second call err = %v, want the scripted error", err)
+	}
+	if _, err := stub.Speak(context.Background(), llm.SpeechRequest{}); !errors.Is(err, ErrStubExhausted) {
+		t.Errorf("third call err = %v, want ErrStubExhausted", err)
+	}
+	if reqs := stub.SpeechRequests(); len(reqs) != 2 || reqs[0].Input != "Hallo" {
+		t.Errorf("requests = %+v", reqs)
+	}
+}
