@@ -311,6 +311,19 @@ The Gemini image models are deliberately off the list and keep the
 chat-completions path. `--ref` attaches reference images on both paths (repeat
 it for several); `--quality` is images-endpoint only.
 
+On images-endpoint models `--aspect` is sent as an exact pixel frame (`size`),
+not as `aspect_ratio`, so every `W:H` up to 3:1 comes out exact: `4:5` is
+1024x1280 and `9:16` is 1024x1824 at 1K; `--size 2K`/`4K` raise the short edge
+to 2048/4096 within the 3840 px edge and 8.3 MP caps. A frame the endpoint
+cannot render (wider than 3:1, or `--size 0.5K`) switches to
+`google/gemini-3.1-flash-image-preview` with a notice on stderr, unless the
+model was chosen explicitly (`-m` or `OPENROUTER_IMAGE_MODEL`); then it errors
+and names that model.
+
+`aikido --version` reports the module version the binary was built from:
+`go install github.com/mxcd/aikido/cmd/aikido@v0.6.1` prints `v0.6.1`, a build
+from a checkout prints its VCS pseudo-version or `(devel)` plus the revision.
+
 ### Claude Code skill
 
 `aikido` ships a Claude Code skill that teaches an agent to drive this CLI —

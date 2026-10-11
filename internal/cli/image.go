@@ -6,10 +6,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"mime"
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -34,6 +36,20 @@ var defaultImagesAPIModels = []string{
 	"openai/gpt-image-2",
 	"meta/muse-image",
 }
+
+// fallbackImageModel renders the frames the images endpoint cannot: ratios
+// wider than 3:1 and the 0.5K tier.
+const fallbackImageModel = "google/gemini-3.1-flash-image-preview"
+
+// Images-endpoint frame limits (OpenAI gpt-image): sides multiples of 16, the
+// longest edge at most 3840, at most 8,294,400 pixels, at most 3:1.
+const (
+	imagesMaxEdge   = 3840
+	imagesMaxPixels = 3840 * 2160
+	imagesMaxRatio  = 3
+)
+
+var errFrameUnsupported = errors.New("frame not supported on the images endpoint")
 
 // maxReferenceBytes caps the raw bytes of all --ref images together. Base64
 // inflates by a third and OpenRouter rejects more than 30 MB of downloaded
@@ -65,11 +81,11 @@ func imageCommand(factory ClientFactory) *urfavecli.Command {
 			&urfavecli.StringFlag{
 				Name:    "aspect",
 				Aliases: []string{"a"},
-				Usage:   "Output aspect ratio: 1:1, 16:9, 9:16, 4:3, 3:4, 3:2, 2:3, 4:5, 5:4, 21:9 (or 1:4/4:1/1:8/8:1 on gemini-3.1-flash-image-preview); OpenAI images-API models reject 4:5",
+				Usage:   "Output aspect ratio W:H, e.g. 1:1, 4:5, 9:16, 16:9, 21:9; images-API models get the exact pixel frame (4:5 at 1K is 1024x1280), up to 3:1 (1:4/4:1/1:8/8:1 need gemini-3.1-flash-image-preview)",
 			},
 			&urfavecli.StringFlag{
 				Name:  "size",
-				Usage: "Output resolution: 1K (default), 2K, 4K (or 0.5K on gemini-3.1-flash-image-preview)",
+				Usage: "Output resolution: 1K (default), 2K, 4K (or 0.5K on gemini-3.1-flash-image-preview); with --aspect on images-API models the short edge is 1024/2048/4096, capped at 3840 long edge and 8.3 MP",
 			},
 			&urfavecli.StringSliceFlag{
 				Name:  "ref",
@@ -93,6 +109,7 @@ func imageCommand(factory ClientFactory) *urfavecli.Command {
 			}
 			return runImage(ctx, imageOpts{
 				model:           cmd.String("model"),
+				modelExplicit:   cmd.IsSet("model"),
 				outDir:          cmd.String("out"),
 				maxTokens:       int(cmd.Int("max-tokens")),
 				aspectRatio:     cmd.String("aspect"),
@@ -108,6 +125,8 @@ func imageCommand(factory ClientFactory) *urfavecli.Command {
 
 type imageOpts struct {
 	model           string
+	modelExplicit   bool // -m or OPENROUTER_IMAGE_MODEL; no automatic fallback then
+	pixelSize       string
 	outDir          string
 	prompt          string
 	maxTokens       int
@@ -139,7 +158,26 @@ func runImage(ctx context.Context, o imageOpts, out io.Writer, client llm.Client
 		images []llm.ImagePart
 		usage  *llm.Usage
 	)
-	if usesImagesAPI(o.model, o.imagesAPIModels) {
+	imagesAPI := usesImagesAPI(o.model, o.imagesAPIModels)
+	if imagesAPI && o.aspectRatio != "" && o.aspectRatio != "auto" {
+		size, err := imagesAPISize(o.aspectRatio, o.imageSize)
+		frame := "--aspect " + o.aspectRatio
+		if o.imageSize != "" {
+			frame += " --size " + o.imageSize
+		}
+		switch {
+		case err == nil:
+			o.pixelSize = size
+		case !errors.Is(err, errFrameUnsupported):
+			return err
+		case o.modelExplicit:
+			return fmt.Errorf("%s cannot render %s (%w); use -m %s", o.model, frame, err, fallbackImageModel)
+		default:
+			fmt.Fprintf(os.Stderr, "aikido: %s cannot render %s, using %s\n", o.model, frame, fallbackImageModel)
+			o.model, o.quality, imagesAPI = fallbackImageModel, "", false
+		}
+	}
+	if imagesAPI {
 		images, usage, err = generateViaImagesAPI(ctx, o, refs, client)
 	} else {
 		text, images, usage, err = generateViaChat(ctx, o, refs, client)
@@ -184,19 +222,74 @@ func generateViaImagesAPI(ctx context.Context, o imageOpts, refs []llm.ImagePart
 	if !ok {
 		return nil, nil, errors.New("client does not support the images endpoint")
 	}
-	resp, err := gen.GenerateImage(ctx, llm.ImageRequest{
+	req := llm.ImageRequest{
 		Model:       o.model,
 		Prompt:      o.prompt,
 		AspectRatio: o.aspectRatio,
 		ImageSize:   o.imageSize,
 		Quality:     o.quality,
 		References:  refs,
-	})
+	}
+	// The endpoint refuses size mixed with aspect_ratio/resolution.
+	if o.pixelSize != "" {
+		req.Size, req.AspectRatio, req.ImageSize = o.pixelSize, "", ""
+	}
+	resp, err := gen.GenerateImage(ctx, req)
 	if err != nil {
 		return nil, nil, err
 	}
 	return resp.Images, resp.Usage, nil
 }
+
+// imagesAPISize turns an aspect ratio and resolution tier into the exact
+// WIDTHxHEIGHT the images endpoint takes. The aspect_ratio field alone rejects
+// 4:5 and renders 9:16 and 3:4 both as 1024x1536; explicit pixels come back
+// exact. The tier sets the short edge (1K = 1024), then the frame shrinks to
+// the endpoint's edge and pixel caps, both sides on multiples of 16.
+func imagesAPISize(aspect, tier string) (string, error) {
+	ws, hs, ok := strings.Cut(strings.TrimSpace(aspect), ":")
+	w, errW := strconv.Atoi(ws)
+	h, errH := strconv.Atoi(hs)
+	if !ok || errW != nil || errH != nil || w <= 0 || h <= 0 {
+		return "", fmt.Errorf("invalid --aspect %q: want W:H such as 4:5", aspect)
+	}
+	var short float64
+	switch strings.ToUpper(strings.TrimSpace(tier)) {
+	case "", "1K":
+		short = 1024
+	case "2K":
+		short = 2048
+	case "4K":
+		short = 4096
+	default:
+		return "", errFrameUnsupported
+	}
+	lo, hi := float64(min(w, h)), float64(max(w, h))
+	if hi/lo > imagesMaxRatio {
+		return "", errFrameUnsupported
+	}
+	long := short * hi / lo
+	if long > imagesMaxEdge {
+		short, long = short*imagesMaxEdge/long, imagesMaxEdge
+	}
+	if f := math.Sqrt(imagesMaxPixels / (short * long)); f < 1 {
+		short, long = short*f, long*f
+	}
+	s, l := round16(short), round16(long)
+	for l > imagesMaxEdge || s*l > imagesMaxPixels {
+		if l > imagesMaxEdge {
+			l -= 16
+		} else {
+			s -= 16
+		}
+	}
+	if w < h {
+		return fmt.Sprintf("%dx%d", s, l), nil
+	}
+	return fmt.Sprintf("%dx%d", l, s), nil
+}
+
+func round16(x float64) int { return int(math.Round(x/16)) * 16 }
 
 // generateViaChat renders through chat completions with image output, the path
 // every dual-endpoint model (Gemini, gpt-5.4-image-2) takes.

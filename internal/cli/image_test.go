@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/base64"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -440,7 +441,7 @@ func TestImageCommand_ThreadsQualityAndRefs(t *testing.T) {
 		t.Fatalf("image requests = %d, want 1", len(reqs))
 	}
 	got := reqs[0]
-	if got.Quality != "high" || got.AspectRatio != "9:16" || got.ImageSize != "2K" {
+	if got.Quality != "high" || got.Size != "2048x3648" || got.AspectRatio != "" || got.ImageSize != "" {
 		t.Errorf("request = %+v", got)
 	}
 	if len(got.References) != 1 {
@@ -629,6 +630,120 @@ func TestHintImagesAPI(t *testing.T) {
 		}
 		if !strings.Contains(got.Error(), msg) {
 			t.Errorf("original message lost: %v", got)
+		}
+	}
+}
+
+func TestImagesAPISize(t *testing.T) {
+	cases := []struct{ aspect, tier, want string }{
+		{"4:5", "", "1024x1280"},
+		{"4:5", "1K", "1024x1280"},
+		{"5:4", "1k", "1280x1024"},
+		{"9:16", "", "1024x1824"},
+		{"16:9", "", "1824x1024"},
+		{"3:4", "", "1024x1360"},
+		{"1:1", "", "1024x1024"},
+		{"21:9", "", "2384x1024"},
+		{"3:1", "", "3072x1024"},
+		{"2:3", "2K", "2048x3072"},
+		{"4:5", "2K", "2048x2560"},
+		{"9:16", "2K", "2048x3648"},
+		{"16:9", "4K", "3840x2160"},
+		{"1:1", "4K", "2880x2880"},
+		{"4:5", "4K", "2576x3216"},
+		{" 4:5 ", "", "1024x1280"},
+	}
+	for _, tc := range cases {
+		got, err := imagesAPISize(tc.aspect, tc.tier)
+		if err != nil || got != tc.want {
+			t.Errorf("imagesAPISize(%q, %q) = %q, %v; want %q", tc.aspect, tc.tier, got, err, tc.want)
+			continue
+		}
+		var w, h int
+		if _, err := fmt.Sscanf(got, "%dx%d", &w, &h); err != nil {
+			t.Fatalf("parse %q: %v", got, err)
+		}
+		if w%16 != 0 || h%16 != 0 || max(w, h) > imagesMaxEdge || w*h > imagesMaxPixels {
+			t.Errorf("%q breaks the endpoint limits", got)
+		}
+	}
+}
+
+func TestImagesAPISize_Unsupported(t *testing.T) {
+	for _, tc := range []struct{ aspect, tier string }{{"1:4", ""}, {"8:1", "2K"}, {"4:5", "0.5K"}} {
+		if _, err := imagesAPISize(tc.aspect, tc.tier); !errors.Is(err, errFrameUnsupported) {
+			t.Errorf("imagesAPISize(%q, %q) err = %v, want errFrameUnsupported", tc.aspect, tc.tier, err)
+		}
+	}
+	for _, bad := range []string{"4x5", "a:b", "0:5", "4:", "-4:5"} {
+		if _, err := imagesAPISize(bad, ""); err == nil || errors.Is(err, errFrameUnsupported) {
+			t.Errorf("imagesAPISize(%q) err = %v, want a parse error", bad, err)
+		}
+	}
+}
+
+func TestImageCommand_DefaultModelSendsPixelsFor45(t *testing.T) {
+	clearImageEnv(t)
+	stub := imagesStub()
+	app := NewApp(func() (llm.Client, error) { return stub, nil })
+	if err := app.Run(context.Background(), []string{"aikido", "image", "--out", t.TempDir(), "--aspect", "4:5", "hi"}); err != nil {
+		t.Fatalf("app.Run: %v", err)
+	}
+	reqs := stub.ImageRequests()
+	if len(reqs) != 1 || reqs[0].Size != "1024x1280" || reqs[0].AspectRatio != "" || reqs[0].ImageSize != "" {
+		t.Errorf("image requests = %+v, want one call with size 1024x1280 only", reqs)
+	}
+}
+
+func TestImageCommand_AutoAspectPassesThrough(t *testing.T) {
+	clearImageEnv(t)
+	stub := imagesStub()
+	app := NewApp(func() (llm.Client, error) { return stub, nil })
+	if err := app.Run(context.Background(), []string{"aikido", "image", "--out", t.TempDir(), "--aspect", "auto", "hi"}); err != nil {
+		t.Fatalf("app.Run: %v", err)
+	}
+	if reqs := stub.ImageRequests(); len(reqs) != 1 || reqs[0].AspectRatio != "auto" || reqs[0].Size != "" {
+		t.Errorf("image requests = %+v, want aspect auto passed through", reqs)
+	}
+}
+
+func TestImageCommand_UnsupportedFrameFallsBackForDefaultModel(t *testing.T) {
+	clearImageEnv(t)
+	chat := llmtest.NewStubClient(llmtest.TurnScript{Events: []llm.Event{
+		{Kind: llm.EventImage, Image: &llm.ImagePart{ContentType: "image/png", Data: fakePNG}},
+		{Kind: llm.EventEnd},
+	}})
+	app := NewApp(func() (llm.Client, error) { return chat, nil })
+	args := []string{"aikido", "image", "--out", t.TempDir(), "--aspect", "1:4", "--quality", "low", "hi"}
+	if err := app.Run(context.Background(), args); err != nil {
+		t.Fatalf("app.Run: %v", err)
+	}
+	reqs := chat.Requests()
+	if len(reqs) != 1 || reqs[0].Model != fallbackImageModel || reqs[0].ImageConfig == nil || reqs[0].ImageConfig.AspectRatio != "1:4" {
+		t.Errorf("chat requests = %+v, want one %s call with 1:4", reqs, fallbackImageModel)
+	}
+	if n := len(chat.ImageRequests()); n != 0 {
+		t.Errorf("image requests = %d, want 0", n)
+	}
+}
+
+func TestImageCommand_UnsupportedFrameErrorsForExplicitModel(t *testing.T) {
+	for _, viaEnv := range []bool{false, true} {
+		clearImageEnv(t)
+		args := []string{"aikido", "image", "--out", t.TempDir(), "--aspect", "1:4"}
+		if viaEnv {
+			t.Setenv("OPENROUTER_IMAGE_MODEL", defaultImageModel)
+		} else {
+			args = append(args, "-m", defaultImageModel)
+		}
+		stub := imagesStub()
+		app := NewApp(func() (llm.Client, error) { return stub, nil })
+		err := app.Run(context.Background(), append(args, "hi"))
+		if err == nil || !strings.Contains(err.Error(), "-m "+fallbackImageModel) {
+			t.Errorf("viaEnv=%v: err = %v, want a hint naming %s", viaEnv, err, fallbackImageModel)
+		}
+		if n := len(stub.ImageRequests()) + len(stub.Requests()); n != 0 {
+			t.Errorf("viaEnv=%v: %d provider calls, want 0", viaEnv, n)
 		}
 	}
 }

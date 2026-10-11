@@ -50,11 +50,17 @@ aikido image [--model MODEL] [--out DIR] [--aspect RATIO] [--size 1K|2K|4K] \
   then the compiled-in default `openai/gpt-image-2.5-flare`.
 - `--out / -o` — output directory (default `./out`). Files are written as
   `image-YYYYMMDD-HHMMSS-NN.{png,jpg,webp,gif}`.
-- `--aspect / -a` — aspect ratio: `1:1`, `16:9`, `9:16`, `4:3`, `3:4`, `3:2`,
-  `2:3`, `4:5`, `5:4`, `21:9` (gemini-3.1-flash-image-preview also accepts
-  `1:4`, `4:1`, `1:8`, `8:1`). OpenAI images-API models reject `4:5`.
-- `--size` — output resolution: `1K` (default), `2K`, `4K`
-  (gemini-3.1-flash-image-preview also accepts `0.5K`).
+- `--aspect / -a` - aspect ratio `W:H`: `1:1`, `16:9`, `9:16`, `4:3`, `3:4`,
+  `3:2`, `2:3`, `4:5` (Instagram feed), `5:4`, `21:9`. On the default model
+  (and every images-API model) the CLI sends the exact pixel frame, so the
+  output matches: `4:5` is 1024x1280, `9:16` is 1024x1824 at 1K. Ratios wider
+  than 3:1 (`1:4`, `4:1`, `1:8`, `8:1`) only work on
+  gemini-3.1-flash-image-preview: without `-m` the CLI switches to it and says
+  so on stderr; with an explicit `-m` images-API model it errors and names it.
+- `--size` - output resolution: `1K` (default), `2K`, `4K`. With `--aspect` on
+  images-API models it sets the short edge (1024/2048/4096, capped at 3840 long
+  edge and 8.3 MP; `4:5 --size 2K` is 2048x2560). `0.5K` is Gemini only (same
+  automatic switch as above).
 - `--ref` - a reference image file to edit or take as guidance. Repeat the flag
   for several. Works on both model families.
 - `--quality` - `auto` (default), `low`, `medium`, `high`, `xhigh`, `max`.
