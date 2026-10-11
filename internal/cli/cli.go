@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"runtime/debug"
 
 	"github.com/mxcd/aikido/llm"
 	"github.com/mxcd/aikido/llm/openrouter"
@@ -32,8 +33,41 @@ func resolveWriter(cmd *urfavecli.Command) io.Writer {
 	return os.Stdout
 }
 
-// Version is the CLI's reported version.
-const Version = "v0.1.0-dev"
+// version is the CLI's reported version, read from the build info the Go
+// toolchain embeds: `go install github.com/mxcd/aikido/cmd/aikido@v0.6.1`
+// reports v0.6.1, a checkout build reports its VCS pseudo-version or revision.
+func version() string {
+	info, ok := debug.ReadBuildInfo()
+	if !ok {
+		return "(devel)"
+	}
+	return versionFromBuildInfo(info)
+}
+
+func versionFromBuildInfo(info *debug.BuildInfo) string {
+	if v := info.Main.Version; v != "" && v != "(devel)" {
+		return v
+	}
+	var rev, modified string
+	for _, s := range info.Settings {
+		switch s.Key {
+		case "vcs.revision":
+			rev = s.Value
+		case "vcs.modified":
+			modified = s.Value
+		}
+	}
+	if rev == "" {
+		return "(devel)"
+	}
+	if len(rev) > 12 {
+		rev = rev[:12]
+	}
+	if modified == "true" {
+		rev += "+dirty"
+	}
+	return "(devel) " + rev
+}
 
 // ClientFactory builds the llm.Client used by every subcommand.
 //
@@ -46,7 +80,7 @@ func NewApp(factory ClientFactory) *urfavecli.Command {
 	return &urfavecli.Command{
 		Name:                  "aikido",
 		Usage:                 "AI KIt DOing things — chat one-shots and agent runs over an in-memory VFS",
-		Version:               Version,
+		Version:               version(),
 		EnableShellCompletion: true,
 		Description: "aikido is a thin CLI over the aikido Go library. Subcommands run\n" +
 			"completions or agent loops against OpenRouter; the API key is read from\n" +

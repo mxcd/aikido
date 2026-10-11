@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"runtime/debug"
 	"strings"
 	"testing"
 
@@ -23,8 +24,31 @@ func TestNewApp_VersionFlag(t *testing.T) {
 	if err := app.Run(context.Background(), []string{"aikido", "--version"}); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	if !strings.Contains(out.String(), Version) {
-		t.Errorf("version output missing %q: %q", Version, out.String())
+	if !strings.Contains(out.String(), version()) {
+		t.Errorf("version output missing %q: %q", version(), out.String())
+	}
+}
+
+func TestVersionFromBuildInfo(t *testing.T) {
+	rev := []debug.BuildSetting{{Key: "vcs.revision", Value: "b25d1832e0c5f6a7b8c9d0e1f2a3b4c5d6e7f8a9"}}
+	cases := []struct {
+		name string
+		info debug.BuildInfo
+		want string
+	}{
+		{"go install at a tag", debug.BuildInfo{Main: debug.Module{Version: "v0.6.1"}}, "v0.6.1"},
+		{"checkout pseudo-version", debug.BuildInfo{Main: debug.Module{Version: "v0.6.1-0.20261011120000-b25d1832e0c5+dirty"}}, "v0.6.1-0.20261011120000-b25d1832e0c5+dirty"},
+		{"devel with revision", debug.BuildInfo{Main: debug.Module{Version: "(devel)"}, Settings: rev}, "(devel) b25d1832e0c5"},
+		{"devel dirty", debug.BuildInfo{Main: debug.Module{Version: "(devel)"}, Settings: append(rev, debug.BuildSetting{Key: "vcs.modified", Value: "true"})}, "(devel) b25d1832e0c5+dirty"},
+		{"devel without vcs", debug.BuildInfo{Main: debug.Module{Version: "(devel)"}}, "(devel)"},
+		{"empty", debug.BuildInfo{}, "(devel)"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := versionFromBuildInfo(&tc.info); got != tc.want {
+				t.Errorf("got %q, want %q", got, tc.want)
+			}
+		})
 	}
 }
 
