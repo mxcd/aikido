@@ -62,24 +62,48 @@ type TranscribeRequest struct {
 	// domain vocabulary, how to write numbers. Keep example sentences and
 	// amounts out of it, the model repeats them for a silent clip.
 	Hint string
+	// Vocabulary, when set, lists its Terms in the prompt and corrects the
+	// transcript with Vocabulary.Correct.
+	Vocabulary *Vocabulary
+}
+
+// Transcription is the result of TranscribeDetailed. Raw is the model's
+// transcript, Text the same after Vocabulary.Correct (equal without a
+// vocabulary). Both are "" for a clip without speech. Usage is nil when the
+// provider reported none.
+type Transcription struct {
+	Text  string
+	Raw   string
+	Usage *Usage
 }
 
 // Transcribe returns the speech in req.Audio as text, using a chat-completions
 // call on c.Complete, so it works with any Client whose provider accepts
 // audio input. Temperature is 0. A clip without intelligible speech returns
-// "", not an error.
+// "", not an error. The text is the corrected one when req.Vocabulary is set;
+// TranscribeDetailed also returns the raw transcript.
 //
 // Usage is returned alongside the text, also on error when the provider
 // reported one.
 func Transcribe(ctx context.Context, c Client, req TranscribeRequest) (string, *Usage, error) {
+	t, err := TranscribeDetailed(ctx, c, req)
+	return t.Text, t.Usage, err
+}
+
+// TranscribeDetailed is Transcribe returning the raw and the corrected
+// transcript.
+func TranscribeDetailed(ctx context.Context, c Client, req TranscribeRequest) (Transcription, error) {
 	if len(req.Audio) == 0 || req.Format == "" {
-		return "", nil, fmt.Errorf("aikido/llm: transcribe: audio and format are required: %w", ErrInvalidRequest)
+		return Transcription{}, fmt.Errorf("aikido/llm: transcribe: audio and format are required: %w", ErrInvalidRequest)
 	}
 	model := req.Model
 	if model == "" {
 		model = DefaultTranscribeModel
 	}
 	prompt := transcribePrompt
+	if line := req.Vocabulary.promptLine(); line != "" {
+		prompt += "\n\n" + line
+	}
 	if req.Hint != "" {
 		prompt += "\n\n" + req.Hint
 	}
@@ -93,11 +117,27 @@ func Transcribe(ctx context.Context, c Client, req TranscribeRequest) (string, *
 		Temperature: Float32(0),
 	})
 	if err != nil {
-		return "", resp.Usage, err
+		return Transcription{Usage: resp.Usage}, err
 	}
-	text := strings.TrimSpace(resp.Text)
-	if strings.Contains(text, noSpeech) {
-		return "", resp.Usage, nil
+	raw := strings.TrimSpace(resp.Text)
+	if isNoSpeech(raw) {
+		return Transcription{Usage: resp.Usage}, nil
 	}
-	return text, resp.Usage, nil
+	return Transcription{Text: req.Vocabulary.Correct(raw), Raw: raw, Usage: resp.Usage}, nil
+}
+
+// isNoSpeech reports whether a reply is the no-speech marker. Models with a
+// non-English hint translate it ("[keine Sprache]", "[nessun parlato]"), so
+// any reply that is only a short bracketed phrase counts, as does the marker
+// anywhere in the reply.
+func isNoSpeech(text string) bool {
+	if strings.Contains(strings.ToLower(text), noSpeech) {
+		return true
+	}
+	inner, ok := strings.CutPrefix(text, "[")
+	if !ok {
+		return false
+	}
+	inner, ok = strings.CutSuffix(strings.TrimRight(inner, "."), "]")
+	return ok && !strings.ContainsAny(inner, "[]") && len(strings.Fields(inner)) <= 4
 }
