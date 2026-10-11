@@ -437,3 +437,89 @@ func TestSpeakable(t *testing.T) {
 		}
 	}
 }
+
+func lastDone(t *testing.T, evs []Event) Event {
+	t.Helper()
+	if n := len(only(evs, EventDone)); n != 1 {
+		t.Fatalf("done events = %d (%s)", n, kinds(evs))
+	}
+	last := evs[len(evs)-1]
+	if last.Kind != EventDone || last.Usage == nil {
+		t.Fatalf("last event = %+v (%s)", last, kinds(evs))
+	}
+	return last
+}
+
+func TestRun_CancelMidLLMStillDeliversDone(t *testing.T) {
+	t.Parallel()
+	stt := llmtest.NewStubClient(transcriptTurn("Hallo."))
+	chat := &gatedClient{first: "Die Dusche ", gate: make(chan struct{})}
+	p, _ := New(&Options{Transcriber: stt})
+	session, _ := newSession(t, chat)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ch, _ := p.Run(ctx, session, Input{Audio: []byte("x"), ContentType: "audio/wav"})
+	var evs []Event
+	for ev := range ch {
+		evs = append(evs, ev)
+		if ev.Kind == EventText {
+			cancel()
+		}
+	}
+	done := lastDone(t, evs)
+	if done.EndReason != agent.EndReasonCancelled || done.Usage.Transcription == nil || done.Usage.CostUSD != 0.0001 {
+		t.Fatalf("done = %+v usage %+v", done, done.Usage)
+	}
+}
+
+func TestRun_DeadlineMidTTSStillDeliversDone(t *testing.T) {
+	t.Parallel()
+	chat := llmtest.NewStubClient(replyTurn(0.002, answer1+answer2))
+	speech := &fakeSpeech{delay: func(string) time.Duration { return time.Minute }}
+	p, _ := New(&Options{Speech: speech, SpeechUSDPerChar: 0.00002})
+	session, _ := newSession(t, chat)
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	ch, _ := p.Run(ctx, session, Input{Text: "Hallo", Output: OutputSpeech})
+	done := lastDone(t, collect(t, ch))
+	if done.EndReason != agent.EndReasonTimeout || done.Usage.LLM.CostUSD != 0.002 || done.Usage.SpeechChars != 0 {
+		t.Fatalf("done = %+v usage %+v", done, done.Usage)
+	}
+}
+
+func TestRun_ConsumerThatStopsReading(t *testing.T) {
+	t.Parallel()
+	t.Run("done lands in the buffer", func(t *testing.T) {
+		t.Parallel()
+		p, _ := New(&Options{Speech: &fakeSpeech{}})
+		session, _ := newSession(t, &gatedClient{first: "Die Dusche ", gate: make(chan struct{})})
+		ctx, cancel := context.WithCancel(context.Background())
+		ch, _ := p.Run(ctx, session, Input{Text: "Hallo"})
+		time.Sleep(50 * time.Millisecond) // nobody reads
+		cancel()
+		time.Sleep(50 * time.Millisecond)
+		if done := lastDone(t, collect(t, ch)); done.EndReason != agent.EndReasonCancelled {
+			t.Fatalf("end reason = %q", done.EndReason)
+		}
+	})
+	t.Run("full buffer gives up instead of blocking", func(t *testing.T) {
+		t.Parallel()
+		deltas := make([]string, 100)
+		for i := range deltas {
+			deltas[i] = "x"
+		}
+		p, _ := New(&Options{Speech: &fakeSpeech{}})
+		p.terminalGrace = 20 * time.Millisecond
+		session, _ := newSession(t, llmtest.NewStubClient(replyTurn(0.002, deltas...)))
+		ctx, cancel := context.WithCancel(context.Background())
+		ch, _ := p.Run(ctx, session, Input{Text: "Hallo"})
+		time.Sleep(50 * time.Millisecond) // buffer fills, nobody reads
+		cancel()
+		time.Sleep(100 * time.Millisecond)
+		// The run gave up on done and closed the channel; a blocked run would
+		// hand done over now that we read.
+		if evs := collect(t, ch); len(only(evs, EventDone)) != 0 || len(evs) != cap(ch) {
+			t.Fatalf("got %d events (%s)", len(evs), kinds(evs))
+		}
+	})
+}

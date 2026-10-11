@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/mxcd/aikido/agent"
 	"github.com/mxcd/aikido/llm"
@@ -80,9 +81,14 @@ type Options struct {
 	SpokenStyle string
 }
 
+// terminalGrace bounds how long Run waits to hand over the final EventDone
+// once ctx is over and the consumer's buffer is full.
+const terminalGrace = 5 * time.Second
+
 // Pipeline runs voice turns. Safe for concurrent use.
 type Pipeline struct {
-	opts Options
+	opts          Options
+	terminalGrace time.Duration
 }
 
 // New builds a Pipeline.
@@ -106,7 +112,7 @@ func New(opts *Options) (*Pipeline, error) {
 	if cp.SpeechConcurrency <= 0 {
 		cp.SpeechConcurrency = 2
 	}
-	return &Pipeline{opts: cp}, nil
+	return &Pipeline{opts: cp, terminalGrace: terminalGrace}, nil
 }
 
 // Input is one user turn: Text, or Audio with its ContentType (a MIME type
@@ -146,6 +152,7 @@ const (
 //   - EventError: Err is set. With Speech set, only that chunk failed (no
 //     Audio) and the turn goes on; otherwise EventDone follows.
 //   - EventDone: EndReason (agent.EndReason* or EndReasonNoSpeech) and Usage.
+//     Always the last event, exactly once per Run, also when ctx is over.
 type Event struct {
 	Kind       EventKind
 	Text       string
@@ -186,6 +193,13 @@ type Usage struct {
 // The caller must drain the channel. Cancelling ctx cancels the turn; a
 // server that wants the turn to finish after its client went away passes
 // context.WithoutCancel, as Handler does.
+//
+// Every Run ends with exactly one EventDone carrying the usage accrued so far,
+// then the channel closes. Once ctx is over, other events are dropped, but
+// EventDone is still delivered, with EndReason agent.EndReasonCancelled or
+// agent.EndReasonTimeout in place of "stop" or "error". A
+// consumer that stopped reading does not block Run forever: with a full
+// buffer and ctx over, EventDone is given up after a few seconds.
 func (p *Pipeline) Run(ctx context.Context, r Runner, in Input) (<-chan Event, error) {
 	var format string
 	switch {
@@ -234,7 +248,28 @@ func (p *Pipeline) run(ctx context.Context, r Runner, in Input, format string, o
 		if usage.Transcription != nil {
 			usage.CostUSD += usage.Transcription.CostUSD
 		}
-		emit(Event{Kind: EventDone, EndReason: reason, Usage: usage})
+		// A turn cut short by ctx says so, also when the agent finished but
+		// speech did not.
+		if reason == agent.EndReasonError || reason == agent.EndReasonStop {
+			switch {
+			case errors.Is(ctx.Err(), context.Canceled):
+				reason = agent.EndReasonCancelled
+			case errors.Is(ctx.Err(), context.DeadlineExceeded):
+				reason = agent.EndReasonTimeout
+			}
+		}
+		ev := Event{Kind: EventDone, EndReason: reason, Usage: usage}
+		select {
+		case out <- ev:
+			return
+		case <-ctx.Done():
+		}
+		t := time.NewTimer(p.terminalGrace)
+		defer t.Stop()
+		select {
+		case out <- ev:
+		case <-t.C:
+		}
 	}
 
 	text := in.Text
