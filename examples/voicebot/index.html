@@ -1,0 +1,158 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>aikido voicebot</title>
+<style>
+  body { font: 16px/1.5 system-ui, sans-serif; max-width: 46rem; margin: 2rem auto; padding: 0 1rem; color: #1d1d1f; }
+  h1 { font-size: 1.25rem; }
+  fieldset { border: 1px solid #ddd; border-radius: 8px; margin: 0 0 1rem; }
+  #log { display: flex; flex-direction: column; gap: .75rem; margin: 1rem 0; }
+  .user, .bot { padding: .6rem .8rem; border-radius: 8px; white-space: pre-wrap; }
+  .user { background: #eef3ff; align-self: flex-end; }
+  .bot { background: #f4f4f4; }
+  .meta { color: #777; font-size: .8rem; }
+  .err { color: #b00020; }
+  form { display: flex; gap: .5rem; }
+  input[type=text] { flex: 1; padding: .5rem; font: inherit; }
+  button { font: inherit; padding: .5rem 1rem; border-radius: 6px; border: 1px solid #bbb; background: #fff; cursor: pointer; }
+  #talk { width: 100%; padding: 1rem; touch-action: none; user-select: none; }
+  #talk.rec { background: #ffe3e3; border-color: #e33; }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<h1>aikido voicebot - Badplanung</h1>
+
+<fieldset>
+  <legend>Modus</legend>
+  <label><input type="radio" name="mode" value="voice-speech" checked> Sprache rein, Sprache raus</label><br>
+  <label><input type="radio" name="mode" value="voice-text"> Sprache rein, Text raus</label><br>
+  <label><input type="radio" name="mode" value="text-speech"> Text rein, Sprache raus</label><br>
+  <label><input type="radio" name="mode" value="text-text"> Text rein, Text raus</label>
+</fieldset>
+
+<div id="log"></div>
+
+<button id="talk" type="button">Gedrückt halten und sprechen</button>
+<form id="text" hidden>
+  <input type="text" id="prompt" placeholder="Frage zur Badplanung..." autocomplete="off">
+  <button>Senden</button>
+</form>
+
+<script>
+const log = document.getElementById("log");
+const talk = document.getElementById("talk");
+const textForm = document.getElementById("text");
+const prompt = document.getElementById("prompt");
+
+const mode = () => document.querySelector("input[name=mode]:checked").value.split("-");
+function applyMode() {
+  const [input] = mode();
+  talk.hidden = input !== "voice";
+  textForm.hidden = input !== "text";
+}
+document.querySelectorAll("input[name=mode]").forEach(r => r.addEventListener("change", applyMode));
+applyMode();
+
+function bubble(cls, text) {
+  const el = document.createElement("div");
+  el.className = cls;
+  el.textContent = text;
+  log.append(el);
+  el.scrollIntoView({ block: "end" });
+  return el;
+}
+
+// Speech chunks arrive in seq order; play them one after another.
+const queue = [];
+let playing = false;
+function enqueueAudio(b64, type) {
+  const bytes = Uint8Array.from(atob(b64), c => c.charCodeAt(0));
+  queue.push(URL.createObjectURL(new Blob([bytes], { type })));
+  if (!playing) playNext();
+}
+function playNext() {
+  const url = queue.shift();
+  if (!url) { playing = false; return; }
+  playing = true;
+  const audio = new Audio(url);
+  audio.onended = audio.onerror = () => { URL.revokeObjectURL(url); playNext(); };
+  audio.play().catch(() => playNext());
+}
+
+async function turn(body, contentType, query) {
+  const userEl = contentType === "application/json" ? bubble("user", JSON.parse(body).text) : bubble("user", "...");
+  const bot = bubble("bot", "");
+  const meta = document.createElement("div");
+  meta.className = "meta";
+  bot.after(meta);
+  const res = await fetch("/api/turn" + (query || ""), { method: "POST", headers: { "Content-Type": contentType }, body });
+  if (!res.ok) {
+    bot.textContent = (await res.json()).error;
+    bot.classList.add("err");
+    return;
+  }
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buf = "";
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buf += decoder.decode(value, { stream: true });
+    let nl;
+    while ((nl = buf.indexOf("\n")) >= 0) {
+      const ev = JSON.parse(buf.slice(0, nl));
+      buf = buf.slice(nl + 1);
+      switch (ev.type) {
+        case "transcript":
+          userEl.textContent = ev.text || "(keine Sprache erkannt)";
+          if (ev.raw && ev.raw !== ev.text) userEl.title = "erkannt: " + ev.raw;
+          break;
+        case "text": bot.textContent += ev.text; break;
+        case "tool_call": meta.textContent += " - " + ev.tool.name; break;
+        case "speech": enqueueAudio(ev.audio, ev.content_type); break;
+        case "error": meta.insertAdjacentHTML("beforeend", ' <span class="err"></span>'); meta.lastChild.textContent = ev.error; break;
+        case "done":
+          if (!bot.textContent) bot.remove();
+          meta.textContent += ` [${ev.end_reason}, ${ev.usage.cost_usd.toFixed(4)} USD]`;
+          break;
+      }
+    }
+  }
+}
+
+textForm.addEventListener("submit", e => {
+  e.preventDefault();
+  const text = prompt.value.trim();
+  if (!text) return;
+  prompt.value = "";
+  turn(JSON.stringify({ text, output: mode()[1], language: "de" }), "application/json");
+});
+
+// Push to talk: record while the button is held.
+let recorder, held = false;
+talk.addEventListener("pointerdown", async () => {
+  held = true;
+  const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  const type = ["audio/webm;codecs=opus", "audio/mp4"].find(t => MediaRecorder.isTypeSupported(t));
+  recorder = new MediaRecorder(stream, type ? { mimeType: type } : undefined);
+  const parts = [];
+  recorder.ondataavailable = e => parts.push(e.data);
+  recorder.onstop = () => {
+    stream.getTracks().forEach(t => t.stop());
+    talk.classList.remove("rec");
+    const blob = new Blob(parts, { type: recorder.mimeType });
+    if (blob.size > 0) turn(blob, recorder.mimeType, `?output=${mode()[1]}&language=de`);
+  };
+  recorder.start();
+  talk.classList.add("rec");
+  if (!held) recorder.stop(); // released while the mic permission was pending
+});
+const stop = () => { held = false; if (recorder && recorder.state === "recording") recorder.stop(); };
+talk.addEventListener("pointerup", stop);
+talk.addEventListener("pointerleave", stop);
+</script>
+</body>
+</html>
