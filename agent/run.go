@@ -22,8 +22,25 @@ import (
 // the History is NOT updated for this turn — the caller knows to retry, and
 // the durable transcript stays consistent.
 func (s *Session) Run(ctx context.Context, userText string) (<-chan Event, error) {
+	return s.RunWithOptions(ctx, userText, nil)
+}
+
+// RunOptions tune one Run without changing the Session.
+type RunOptions struct {
+	// SystemSuffix is appended to SessionOptions.SystemPrompt for this run
+	// only, e.g. a reply-style instruction for a spoken answer. It is never
+	// written to History.
+	SystemSuffix string
+}
+
+// RunWithOptions is Run with per-run options. A nil opts is Run.
+func (s *Session) RunWithOptions(ctx context.Context, userText string, opts *RunOptions) (<-chan Event, error) {
+	var suffix string
+	if opts != nil {
+		suffix = opts.SystemSuffix
+	}
 	out := make(chan Event, 16)
-	go s.runLoop(ctx, out, userText, nil, true)
+	go s.runLoop(ctx, out, userText, nil, true, suffix)
 	return out, nil
 }
 
@@ -36,11 +53,11 @@ func (s *Session) Run(ctx context.Context, userText string) (<-chan Event, error
 // to assemble the produced messages.
 func (s *Session) RunWithMessages(ctx context.Context, history []llm.Message) (<-chan Event, error) {
 	out := make(chan Event, 16)
-	go s.runLoop(ctx, out, "", history, false)
+	go s.runLoop(ctx, out, "", history, false, "")
 	return out, nil
 }
 
-func (s *Session) runLoop(userCtx context.Context, out chan<- Event, userText string, customHistory []llm.Message, useHistoryStore bool) {
+func (s *Session) runLoop(userCtx context.Context, out chan<- Event, userText string, customHistory []llm.Message, useHistoryStore bool, systemSuffix string) {
 	defer close(out)
 
 	// Build runCtx with RunTimeout cap.
@@ -72,8 +89,15 @@ func (s *Session) runLoop(userCtx context.Context, out chan<- Event, userText st
 	}
 
 	msgs := make([]llm.Message, 0, len(hist)+2)
-	if s.opts.SystemPrompt != "" {
-		msgs = append(msgs, llm.Message{Role: llm.RoleSystem, Content: s.opts.SystemPrompt})
+	system := s.opts.SystemPrompt
+	if systemSuffix != "" {
+		if system != "" {
+			system += "\n\n"
+		}
+		system += systemSuffix
+	}
+	if system != "" {
+		msgs = append(msgs, llm.Message{Role: llm.RoleSystem, Content: system})
 	}
 	msgs = append(msgs, hist...)
 

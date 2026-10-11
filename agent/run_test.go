@@ -613,3 +613,31 @@ func TestNewLocalSession_RespectsProvided(t *testing.T) {
 		t.Error("custom Locker was overwritten")
 	}
 }
+
+func TestRunWithOptions_SystemSuffixIsPerRun(t *testing.T) {
+	turn := func() llmtest.TurnScript {
+		return llmtest.TurnScript{Events: []llm.Event{{Kind: llm.EventTextDelta, Text: "ok"}, {Kind: llm.EventEnd}}}
+	}
+	stub := llmtest.NewStubClient(turn(), turn())
+	hist := memory.NewHistory()
+	s := newTestSession(t, stub, nil, hist)
+
+	ch, _ := s.RunWithOptions(context.Background(), "one", &RunOptions{SystemSuffix: "Answer briefly."})
+	collectEvents(t, ch)
+	ch, _ = s.Run(context.Background(), "two")
+	collectEvents(t, ch)
+
+	reqs := stub.Requests()
+	if got := reqs[0].Messages[0].Content; got != "you are a test\n\nAnswer briefly." {
+		t.Errorf("first system = %q", got)
+	}
+	if got := reqs[1].Messages[0].Content; got != "you are a test" {
+		t.Errorf("second system = %q", got)
+	}
+	msgs, _ := hist.Read(context.Background(), "s-test")
+	for _, m := range msgs {
+		if m.Role == llm.RoleSystem || strings.Contains(m.Content, "Answer briefly") {
+			t.Errorf("suffix leaked into history: %+v", m)
+		}
+	}
+}
