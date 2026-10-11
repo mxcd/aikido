@@ -11,7 +11,7 @@ Backed by OpenRouter in v1; designed so v2 can plug in direct providers (Anthrop
 ## What you get in v1
 
 - **`llm`** — provider-agnostic `Client`, streaming `Event` channel, `Request` shape with cache breakpoints, thinking config, and explicit `*float32` temperature.
-- **`llm/openrouter`** - real SSE streaming, tool-call assembly across fragments, 429/5xx retry at stream-start, `ProviderOrder` routing, and `GenerateImage` for the models OpenRouter serves only on `POST /api/v1/images`.
+- **`llm/openrouter`** - real SSE streaming, tool-call assembly across fragments, 429/5xx retry at stream-start (3 attempts, `Options.MaxAttempts` to change, 1 = no retry), `ProviderOrder` routing, and `GenerateImage` for the models OpenRouter serves only on `POST /api/v1/images`.
 - **`llm/codex`** - the Codex backend of a ChatGPT subscription (bills the subscription, not an API key): device-code login, a `TokenSource` that refreshes and hands every rotated login back for persisting, streaming text, image input and structured output. No tools, no audio input.
 - **`llm.Transcribe`** - speech-to-text over any client that accepts audio input (`llm.Message.Audio`, sent by `llm/openrouter` as `input_audio`), with `llm.AudioFormat` for browser MIME types and an `llm.Vocabulary` of expected terms that biases the prompt and corrects the transcript.
 - **`llm.SpeechGenerator`** - text-to-speech, implemented by `llm/openrouter` on `POST /api/v1/audio/speech` (ElevenLabs, OpenAI, Gemini and other TTS models).

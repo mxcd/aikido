@@ -19,7 +19,7 @@ import (
 // that failure mode.
 //
 // Retry behaviour mirrors Stream: 429/5xx at request-start are retried per
-// retryPolicy(); auth and bad-request errors short-circuit. Content-filter
+// retryPolicy; auth and bad-request errors short-circuit. Content-filter
 // aborts surface as ErrContentFiltered (either via a top-level error envelope
 // on the JSON body or via finish_reason="content_filter"). Network-layer
 // errors are mapped onto ErrServerError so CompleteWithRetry can apply the

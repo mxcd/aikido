@@ -43,6 +43,12 @@ type Options struct {
 	// entries form a fallback chain (allow_fallbacks=true). Matches the
 	// production pattern in asolabs/hub.
 	ProviderOrder []string
+
+	// MaxAttempts is the total number of HTTP attempts per call on 429, 5xx
+	// and network errors, on every path (Stream, Complete, transcription,
+	// images, speech). 0 keeps the default of 3; 1 disables retry, for
+	// callers that run their own job-level retry. Negative is treated as 1.
+	MaxAttempts int
 }
 
 // Client is an OpenRouter implementation of llm.Client.
@@ -53,6 +59,7 @@ type Client struct {
 	httpReferer string
 	xTitle      string
 	provOrder   []string
+	maxAttempts int
 }
 
 // Compile-time conformance.
@@ -70,6 +77,7 @@ func NewClient(opts *Options) (*Client, error) {
 		httpReferer: opts.HTTPReferer,
 		xTitle:      opts.XTitle,
 		provOrder:   append([]string(nil), opts.ProviderOrder...),
+		maxAttempts: opts.MaxAttempts,
 	}
 	if c.baseURL == "" {
 		c.baseURL = DefaultBaseURL
@@ -85,7 +93,7 @@ func NewClient(opts *Options) (*Client, error) {
 //
 // Retry happens only at stream-start: if the HTTP response is 429 or 5xx
 // before any SSE bytes have been read, aikido closes the body and retries
-// per the policy returned by retryPolicy(). Mid-stream errors do NOT retry —
+// per retryPolicy (Options.MaxAttempts). Mid-stream errors do NOT retry;
 // they propagate as EventError.
 func (c *Client) Stream(ctx context.Context, req llm.Request) (<-chan llm.Event, error) {
 	body, err := c.buildBody(req, true)
@@ -94,7 +102,7 @@ func (c *Client) Stream(ctx context.Context, req llm.Request) (<-chan llm.Event,
 	}
 
 	var resp *http.Response
-	startErr := retry.Do(ctx, retryPolicy(), func(attempt int) error {
+	startErr := retry.Do(ctx, c.retryPolicy(), func(attempt int) error {
 		// Each attempt builds a fresh *http.Request; net/http does not allow
 		// reusing one across calls.
 		httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/chat/completions", bytes.NewReader(body))
@@ -222,7 +230,7 @@ func (c *Client) post(ctx context.Context, path string, body []byte, accept stri
 		raw    []byte
 		header http.Header
 	)
-	err := retry.Do(ctx, retryPolicy(), func(_ int) error {
+	err := retry.Do(ctx, c.retryPolicy(), func(_ int) error {
 		httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+path, bytes.NewReader(body))
 		if err != nil {
 			return fmt.Errorf("openrouter: build http request: %w", err)

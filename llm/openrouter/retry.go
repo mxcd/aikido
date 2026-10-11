@@ -13,10 +13,14 @@ import (
 	"github.com/mxcd/aikido/retry"
 )
 
-// retryPolicy returns the policy used to wrap stream-start. It only retries
+// retryPolicy returns the policy every HTTP call path uses. It only retries
 // on rate-limit and 5xx errors. Auth and bad-request errors short-circuit.
-func retryPolicy() retry.Policy {
+// Options.MaxAttempts overrides the default attempt count when set.
+func (c *Client) retryPolicy() retry.Policy {
 	p := retry.DefaultPolicy()
+	if c.maxAttempts != 0 {
+		p.MaxAttempts = c.maxAttempts
+	}
 	p.ShouldRetry = func(err error) bool {
 		return errors.Is(err, llm.ErrRateLimited) || errors.Is(err, llm.ErrServerError)
 	}

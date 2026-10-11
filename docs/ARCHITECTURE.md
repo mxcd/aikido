@@ -171,7 +171,7 @@ The previous "per-Session struct mutex" design (locked by ADR-012, before this r
 
 ### Retry policy
 
-LLM call retries happen at **stream-start only**. Once the provider has begun emitting tokens, retrying replays the same tokens and re-bills the user; the agent forbids it. Mid-stream errors propagate as `EventError` and end the turn with `EndReason = "error"`. The provider client (`llm/openrouter`) handles 429 and 5xx with exponential backoff before stream open via the internal `retry` package (ADR-022).
+LLM call retries happen at **stream-start only**. Once the provider has begun emitting tokens, retrying replays the same tokens and re-bills the user; the agent forbids it. Mid-stream errors propagate as `EventError` and end the turn with `EndReason = "error"`. The provider client (`llm/openrouter`) handles 429 and 5xx with exponential backoff before stream open via the internal `retry` package (ADR-022). The same policy covers every non-streaming call (Complete, transcription, images, speech). `openrouter.Options.MaxAttempts` sets the total attempts per call (0 = default 3, 1 = no retry), so a caller with its own job-level retry does not stack the two.
 
 The agent never retries `History` or `Locker` calls. Both have errors that are terminal for the current `Run` (ADR-023). Backends that want retry-on-transient-error implement it inside their `History` / `Locker` impls.
 
