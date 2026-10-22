@@ -85,6 +85,9 @@ func TestHandler_TextInSpeechOut_NDJSON(t *testing.T) {
 	if done["end_reason"] != "stop" || usage["llm_cost_usd"] != 0.002 || usage["speech_chars"] == float64(0) {
 		t.Errorf("done line = %v", done)
 	}
+	if calls, _ := usage["llm_calls"].([]any); len(calls) != 1 || calls[0].(map[string]any)["cost_usd"] != 0.002 {
+		t.Errorf("llm_calls = %v; want one call", usage["llm_calls"])
+	}
 }
 
 func TestHandler_AudioUploads(t *testing.T) {

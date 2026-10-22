@@ -177,10 +177,12 @@ type SpeechChunk struct {
 
 // Usage aggregates one turn over transcription, the agent's model calls and
 // speech. CostUSD is the sum; SpeechCostUSD is SpeechChars times
-// Options.SpeechUSDPerChar.
+// Options.SpeechUSDPerChar. LLM sums the token and cost fields of LLMCalls;
+// the per-call provider, latency and throughput live in LLMCalls only.
 type Usage struct {
 	Transcription *llm.Usage
 	LLM           llm.Usage
+	LLMCalls      []llm.Usage
 	SpeechChars   int
 	SpeechCostUSD float64
 	CostUSD       float64
@@ -332,6 +334,7 @@ func (p *Pipeline) run(ctx context.Context, r Runner, in Input, format string, o
 				usage.LLM.CacheReadTokens += u.CacheReadTokens
 				usage.LLM.CacheWriteTokens += u.CacheWriteTokens
 				usage.LLM.CostUSD += u.CostUSD
+				usage.LLMCalls = append(usage.LLMCalls, *u)
 			}
 		case agent.EventError:
 			emit(Event{Kind: EventError, Err: ev.Err})

@@ -55,7 +55,12 @@ type HandlerOptions struct {
 //	{"type":"tool_result","tool":{"id":"...","name":"...","ok":true,"error":"","content":...}}
 //	{"type":"speech","seq":0,"text":"...","content_type":"audio/mpeg","audio":"<base64>"}
 //	{"type":"error","error":"...","seq":2}
-//	{"type":"done","end_reason":"stop","usage":{"cost_usd":0.0031,...}}
+//	{"type":"done","end_reason":"stop","usage":{"cost_usd":0.0031,...,"llm_calls":[{"provider":"Anthropic","latency_ms":412,"duration_ms":1630,"tokens_per_second":84.2,...}]}}
+//
+// usage.llm_calls has one entry per model call of the turn (tool loops make
+// several) and usage.transcription the transcription call, each with the
+// provider that served it, latency to the first token, total duration and
+// output tokens per second.
 //
 // The done line is always the last one, also for a turn that hit Timeout
 // (end_reason "timeout"), as long as the client is still connected.
@@ -97,6 +102,32 @@ type wireUsage struct {
 	SpeechChars          int     `json:"speech_chars"`
 	PromptTokens         int     `json:"prompt_tokens"`
 	CompletionTokens     int     `json:"completion_tokens"`
+	// Transcription and LLMCalls carry each model call's provider and timing.
+	Transcription *wireCall  `json:"transcription,omitempty"`
+	LLMCalls      []wireCall `json:"llm_calls,omitempty"`
+}
+
+// wireCall is one model call's usage and performance on the wire.
+type wireCall struct {
+	Provider         string  `json:"provider,omitempty"`
+	LatencyMS        int64   `json:"latency_ms"`
+	DurationMS       int64   `json:"duration_ms"`
+	TokensPerSecond  float64 `json:"tokens_per_second"`
+	PromptTokens     int     `json:"prompt_tokens"`
+	CompletionTokens int     `json:"completion_tokens"`
+	CostUSD          float64 `json:"cost_usd"`
+}
+
+func toWireCall(u llm.Usage) wireCall {
+	return wireCall{
+		Provider:         u.Provider,
+		LatencyMS:        u.Latency.Milliseconds(),
+		DurationMS:       u.Duration.Milliseconds(),
+		TokensPerSecond:  u.TokensPerSecond,
+		PromptTokens:     u.PromptTokens,
+		CompletionTokens: u.CompletionTokens,
+		CostUSD:          u.CostUSD,
+	}
 }
 
 type wireEvent struct {
@@ -140,7 +171,12 @@ func (h *Handler) toWire(ev Event) wireEvent {
 			PromptTokens:     u.LLM.PromptTokens,
 			CompletionTokens: u.LLM.CompletionTokens,
 		}
+		for _, c := range u.LLMCalls {
+			wu.LLMCalls = append(wu.LLMCalls, toWireCall(c))
+		}
 		if t := u.Transcription; t != nil {
+			tc := toWireCall(*t)
+			wu.Transcription = &tc
 			wu.TranscriptionCostUSD = t.CostUSD
 			wu.PromptTokens += t.PromptTokens
 			wu.CompletionTokens += t.CompletionTokens
