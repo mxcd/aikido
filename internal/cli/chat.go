@@ -22,13 +22,14 @@ func chatCommand(factory ClientFactory) *urfavecli.Command {
 			&urfavecli.StringFlag{Name: "system", Aliases: []string{"s"}, Usage: "System prompt"},
 			&urfavecli.IntFlag{Name: "max-tokens", Value: 512, Usage: "Max output tokens"},
 			&urfavecli.FloatFlag{Name: "temperature", Aliases: []string{"t"}, Value: -1, Usage: "Sampling temperature; <0 leaves provider default"},
+			providerFlag,
 		},
 		Action: func(ctx context.Context, cmd *urfavecli.Command) error {
 			client, err := factory()
 			if err != nil {
 				return err
 			}
-			return runChat(ctx, chatOpts{
+			return runChat(withProviderFlag(ctx, cmd), chatOpts{
 				model:       cmd.String("model"),
 				system:      cmd.String("system"),
 				maxTokens:   int(cmd.Int("max-tokens")),
@@ -73,8 +74,7 @@ func runChat(ctx context.Context, o chatOpts, out io.Writer, client llm.Client) 
 	}
 	fmt.Fprintln(out, text)
 	if usage != nil {
-		fmt.Fprintf(out, "\n[usage] prompt=%d completion=%d cost=$%.6f\n",
-			usage.PromptTokens, usage.CompletionTokens, usage.CostUSD)
+		fmt.Fprintf(out, "\n%s\n", formatUsage(usage))
 	}
 	return nil
 }

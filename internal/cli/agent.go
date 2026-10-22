@@ -30,6 +30,7 @@ func agentCommand(factory ClientFactory) *urfavecli.Command {
 			&urfavecli.StringFlag{Name: "session", Value: "cli-session", Usage: "Session id (also used as History key)"},
 			&urfavecli.IntFlag{Name: "max-tokens", Value: 4096, Usage: "Max output tokens per turn"},
 			&urfavecli.FloatFlag{Name: "temperature", Aliases: []string{"t"}, Value: -1, Usage: "Sampling temperature; <0 leaves provider default"},
+			providerFlag,
 			&urfavecli.IntFlag{Name: "max-turns", Value: 20, Usage: "Cap before EndReasonMaxTurns"},
 			&urfavecli.BoolFlag{Name: "hide-hidden", Value: true, Usage: "Hide files whose path segments start with _ or ."},
 		},
@@ -38,7 +39,7 @@ func agentCommand(factory ClientFactory) *urfavecli.Command {
 			if err != nil {
 				return err
 			}
-			return runAgent(ctx, agentOpts{
+			return runAgent(withProviderFlag(ctx, cmd), agentOpts{
 				model:       cmd.String("model"),
 				system:      cmd.String("system"),
 				sessionID:   cmd.String("session"),
@@ -111,8 +112,7 @@ func runAgent(ctx context.Context, o agentOpts, out io.Writer, client llm.Client
 			}
 			fmt.Fprintf(out, "[tool-result] %s %s\n", ev.ToolResult.Name, ok)
 		case agent.EventUsage:
-			fmt.Fprintf(out, "\n[usage] prompt=%d completion=%d cost=$%.6f\n",
-				ev.Usage.PromptTokens, ev.Usage.CompletionTokens, ev.Usage.CostUSD)
+			fmt.Fprintf(out, "\n%s\n", formatUsage(ev.Usage))
 		case agent.EventError:
 			fmt.Fprintf(out, "\n[error] %v\n", ev.Err)
 		case agent.EventEnd:

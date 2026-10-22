@@ -212,20 +212,32 @@ to give the user options. When renaming generated files in **zsh under
 ### One-shot chat completion
 
 ```sh
-aikido chat [--model MODEL] [--system PROMPT] [--max-tokens N] [--temperature T] "<prompt>"
+aikido chat [--model MODEL] [--system PROMPT] [--max-tokens N] [--temperature T] [--provider SLUG]... "<prompt>"
 ```
 
 Default model `anthropic/claude-haiku-4.5`. Prints the completion and a usage
-line. Useful for quick terminal queries without leaving the shell.
+line (tokens, cost, serving provider, latency to first token, duration,
+throughput). `--provider` pins the OpenRouter provider (repeat it for a
+fallback chain). Useful for quick terminal queries without leaving the shell.
+
+### Model catalogue and provider performance
+
+```sh
+aikido models                              # every model: id, context, $/M in/out
+aikido models haiku                        # filtered by substring
+aikido models anthropic/claude-haiku-4.5   # providers: tag, quant, prices, uptime, p50 latency/throughput
+```
+
+The TAG column is the slug `--provider` takes.
 
 ### Agent loop over an in-memory VFS
 
 ```sh
-aikido agent [--model MODEL] [--system PROMPT] [--max-turns N] "<prompt>"
+aikido agent [--model MODEL] [--system PROMPT] [--max-turns N] [--provider SLUG]... "<prompt>"
 ```
 
 Default model `anthropic/claude-sonnet-4.6`. Spins up an agent with built-in
-`read_file`/`write_file`/`list_files`/`delete_file`/`search` tools over a
+`read_file`/`write_file`/`edit_file`/`list_files`/`delete_file`/`grep`/`glob`/`search` tools over a
 throwaway in-memory workspace, streams tool calls/results, and prints the final
 file listing. Good for demoing tool-use loops.
 

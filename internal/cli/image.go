@@ -209,8 +209,7 @@ func runImage(ctx context.Context, o imageOpts, out io.Writer, client llm.Client
 		fmt.Fprintf(out, "\n%s\n", t)
 	}
 	if usage != nil {
-		fmt.Fprintf(out, "\n[usage] prompt=%d completion=%d cost=$%.6f\n",
-			usage.PromptTokens, usage.CompletionTokens, usage.CostUSD)
+		fmt.Fprintf(out, "\n%s\n", formatUsage(usage))
 	}
 	return nil
 }
