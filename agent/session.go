@@ -26,6 +26,9 @@ type SessionOptions struct {
 	LLMCallTimeout time.Duration
 	MaxTokens      int
 	Temperature    *float32
+	// Thinking sets the reasoning effort or budget of every model call, e.g.
+	// llm.ThinkingByEffort(llm.ThinkingEffortLow). Nil leaves the model default.
+	Thinking *llm.ThinkingConfig
 
 	Logger *slog.Logger
 }

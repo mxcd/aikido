@@ -641,3 +641,15 @@ func TestRunWithOptions_SystemSuffixIsPerRun(t *testing.T) {
 		}
 	}
 }
+
+func TestSessionOptions_ThinkingReachesEveryCall(t *testing.T) {
+	stub := llmtest.NewStubClient(llmtest.TurnScript{Events: []llm.Event{{Kind: llm.EventTextDelta, Text: "ok"}, {Kind: llm.EventEnd}}})
+	s := newTestSession(t, stub, nil, nil, func(o *SessionOptions) {
+		o.Thinking = llm.ThinkingByEffort(llm.ThinkingEffortLow)
+	})
+	ch, _ := s.Run(context.Background(), "hi")
+	collectEvents(t, ch)
+	if got := stub.Requests()[0].Thinking.Effort(); got != llm.ThinkingEffortLow {
+		t.Fatalf("effort = %q, want low", got)
+	}
+}

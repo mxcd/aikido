@@ -128,6 +128,7 @@ func (s *Session) runLoop(userCtx context.Context, out chan<- Event, userText st
 			Tools:       toolDefs,
 			MaxTokens:   s.opts.MaxTokens,
 			Temperature: s.opts.Temperature,
+			Thinking:    s.opts.Thinking,
 		}
 
 		events, streamErr := s.opts.Client.Stream(callCtx, req)
