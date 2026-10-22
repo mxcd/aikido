@@ -91,6 +91,7 @@ func NewApp(factory ClientFactory) *urfavecli.Command {
 			agentCommand(factory),
 			imageCommand(factory),
 			videoCommand(factory),
+			decideCommand(factory),
 			modelsCommand(factory),
 			skillCommand(),
 		},

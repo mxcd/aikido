@@ -20,6 +20,7 @@ type modelCatalog interface {
 	Models(ctx context.Context) ([]openrouter.Model, error)
 	ModelEndpoints(ctx context.Context, id string) (openrouter.ModelEndpoints, error)
 	VideoModels(ctx context.Context) ([]openrouter.VideoModel, error)
+	DecisionModels(ctx context.Context) ([]openrouter.Model, error)
 }
 
 func modelsCommand(factory ClientFactory) *urfavecli.Command {
@@ -31,9 +32,11 @@ func modelsCommand(factory ClientFactory) *urfavecli.Command {
 			"A plain word filters that list by substring. An author/slug id prints the\n" +
 			"providers serving that model: tag (the slug for --provider), quantization,\n" +
 			"prices, uptime and p50 latency / throughput over the last 30 minutes.\n" +
-			"--video lists the video models with the values `aikido video` accepts.",
+			"--video lists the video models with the values `aikido video` accepts,\n" +
+			"--decisions the models of the Decisions API (`aikido decide`).",
 		Flags: []urfavecli.Flag{
 			&urfavecli.BoolFlag{Name: "video", Usage: "List video-generation models (durations, resolutions, ratios, frames, audio)"},
+			&urfavecli.BoolFlag{Name: "decisions", Usage: "List Decisions API models (Jev, ...)"},
 		},
 		Action: func(ctx context.Context, cmd *urfavecli.Command) error {
 			client, err := factory()
@@ -49,16 +52,19 @@ func modelsCommand(factory ClientFactory) *urfavecli.Command {
 			if cmd.Bool("video") {
 				return printVideoModels(ctx, out, catalog, arg)
 			}
+			if cmd.Bool("decisions") {
+				return printModels(ctx, out, catalog.DecisionModels, arg)
+			}
 			if strings.Contains(arg, "/") {
 				return printEndpoints(ctx, out, catalog, arg)
 			}
-			return printModels(ctx, out, catalog, arg)
+			return printModels(ctx, out, catalog.Models, arg)
 		},
 	}
 }
 
-func printModels(ctx context.Context, out io.Writer, c modelCatalog, filter string) error {
-	models, err := c.Models(ctx)
+func printModels(ctx context.Context, out io.Writer, list func(context.Context) ([]openrouter.Model, error), filter string) error {
+	models, err := list(ctx)
 	if err != nil {
 		return err
 	}
