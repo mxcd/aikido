@@ -107,7 +107,15 @@ type Usage struct {
     CacheReadTokens  int
     CacheWriteTokens int  // populated by providers that report cache writes (Anthropic); 0 elsewhere
     CostUSD          float64 // populated by providers that report cost (OpenRouter); 0 elsewhere
+
+    Provider        string        // upstream provider that served the call (OpenRouter); "" elsewhere
+    Latency         time.Duration // call to first output token (Stream) / to response (Complete)
+    Duration        time.Duration // call to usage report
+    TokensPerSecond float64       // CompletionTokens / generation time; 0 under 250 ms of generation
 }
+
+// SetTiming fills Latency, Duration and TokensPerSecond (ADR-034).
+func (u *Usage) SetTiming(start, firstOutput, end time.Time)
 
 // ThinkingEffort is the OpenAI-style coarse reasoning-effort enum. Empty
 // string is unset (use provider default).
@@ -341,8 +349,23 @@ type Options struct {
     HTTPClient    *http.Client   // default: timeout 0 — streams may be long-lived
     HTTPReferer   string         // optional OpenRouter ranking attribution
     XTitle        string         // optional OpenRouter ranking attribution
-    ProviderOrder []string       // optional OpenRouter `provider` routing preference
+    Provider      *ProviderPrefs // default `provider` routing block for chat calls
+    ProviderOrder []string       // shorthand for Provider.Order; ignored when Provider is set
+    MaxAttempts   int            // HTTP attempts per call; 0 = 3
 }
+
+// ProviderPrefs: Order, AllowFallbacks, Only, Ignore, Sort ("price" |
+// "throughput" | "latency"), Quantizations, RequireParameters,
+// DataCollection, MaxPrice (USD per million tokens).
+type ProviderPrefs struct{ /* ... */ }
+
+// WithProvider overrides Options.Provider for the chat calls made with ctx.
+func WithProvider(ctx context.Context, p *ProviderPrefs) context.Context
+
+// Models lists the catalogue; ModelEndpoints lists the providers serving one
+// model with pricing, limits, uptime and p50-p99 latency / throughput.
+func (c *Client) Models(ctx context.Context) ([]Model, error)
+func (c *Client) ModelEndpoints(ctx context.Context, id string) (ModelEndpoints, error)
 
 // Client is an OpenRouter implementation of llm.Client.
 type Client struct{ /* ... */ }
@@ -925,7 +948,8 @@ type SpeechChunk struct {
 
 type Usage struct {
     Transcription *llm.Usage
-    LLM           llm.Usage // summed over the agent's calls
+    LLM           llm.Usage   // tokens and cost summed over the agent's calls
+    LLMCalls      []llm.Usage // one per model call, with provider and timing
     SpeechChars   int
     SpeechCostUSD float64   // SpeechChars * SpeechUSDPerChar
     CostUSD       float64   // total

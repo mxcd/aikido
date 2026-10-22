@@ -11,7 +11,7 @@ Backed by OpenRouter in v1; designed so v2 can plug in direct providers (Anthrop
 ## What you get in v1
 
 - **`llm`** — provider-agnostic `Client`, streaming `Event` channel, `Request` shape with cache breakpoints, thinking config, and explicit `*float32` temperature.
-- **`llm/openrouter`** - real SSE streaming, tool-call assembly across fragments, 429/5xx retry at stream-start (3 attempts, `Options.MaxAttempts` to change, 1 = no retry), `ProviderOrder` routing, and `GenerateImage` for the models OpenRouter serves only on `POST /api/v1/images`.
+- **`llm/openrouter`** - real SSE streaming, tool-call assembly across fragments, 429/5xx retry at stream-start (3 attempts, `Options.MaxAttempts` to change, 1 = no retry), provider routing (`Options.Provider` / per call `WithProvider`: order, only, ignore, sort by price/throughput/latency, quantizations, max price), `Models` / `ModelEndpoints` (per-provider pricing, uptime, p50-p99 latency and throughput), and `GenerateImage` for the models OpenRouter serves only on `POST /api/v1/images`.
 - **`llm/codex`** - the Codex backend of a ChatGPT subscription (bills the subscription, not an API key): device-code login, a `TokenSource` that refreshes and hands every rotated login back for persisting, streaming text, image input and structured output. No tools, no audio input.
 - **`llm.Transcribe`** - speech-to-text over any client that accepts audio input (`llm.Message.Audio`, sent by `llm/openrouter` as `input_audio`), with `llm.AudioFormat` for browser MIME types and an `llm.Vocabulary` of expected terms that biases the prompt and corrects the transcript.
 - **`llm.SpeechGenerator`** - text-to-speech, implemented by `llm/openrouter` on `POST /api/v1/audio/speech` (ElevenLabs, OpenAI, Gemini and other TTS models).
@@ -48,6 +48,18 @@ request asks OpenRouter for usage accounting, so cost comes back on the
 non-streaming response and on the final SSE chunk alike. A turn that ends in a
 provider error or a content filter was billed too, and its usage is delivered
 with the error rather than dropped (ADR-030).
+
+Every call's `Usage` also carries `Provider` (who served it), `Latency` (call
+to first token), `Duration` and `TokensPerSecond`, measured client-side
+(ADR-034). Agent runs emit one `EventUsage` per model call; voice turns list
+them in `Usage.LLMCalls` and on the NDJSON done line as `usage.llm_calls`.
+
+```go
+ctx = openrouter.WithProvider(ctx, &openrouter.ProviderPrefs{
+    Only: []string{"google-vertex/europe"}, // or Sort: "throughput"
+})
+eps, _ := client.ModelEndpoints(ctx, "anthropic/claude-haiku-4.5") // eps.Endpoints[i].LatencyLast30m.P50
+```
 
 ### Image generation
 

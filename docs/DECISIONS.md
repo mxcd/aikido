@@ -697,3 +697,50 @@ tool list (more prompt tokens) and a 2000-line default on `read_file`.
 Consumers that pin the tool name list (Hub `internal/nexi` drift guard) must
 add `grep`, `glob`, `edit_file` or set `DisableExtended`. `go.mod` requires Go
 1.25.
+
+## ADR-034 - Provider routing, model catalogue and per-call performance
+
+**Date:** 22.10.2026
+**Status:** Accepted
+
+**Context.** Callers want to pin the upstream provider behind an OpenRouter
+model, pick providers by measured speed, and see for every call who served it
+and how fast. `Options.ProviderOrder` covered only `order` and was fixed per
+client; no call reported its provider, latency or throughput.
+
+**Decision.**
+- `openrouter.ProviderPrefs` mirrors OpenRouter's `provider` block (order,
+  allow_fallbacks, only, ignore, sort, quantizations, require_parameters,
+  data_collection, max_price) and is the wire type itself. `Options.Provider`
+  sets the client default; `openrouter.WithProvider(ctx, p)` replaces it for
+  the calls made with ctx, so agent runs, voice turns and Transcribe get
+  per-call routing without new fields on `llm.Request` (which stays
+  provider-agnostic). `ProviderOrder` stays as shorthand.
+- `llm.Usage` gains `Provider`, `Latency`, `Duration`, `TokensPerSecond`.
+  Timing is measured client-side from the call (retries included): latency to
+  the first output delta (text, reasoning, tool-call fragment, image; a
+  role-only opening chunk does not count), throughput as completion tokens
+  over the time after it. `Complete` and the images endpoint report the whole
+  call as latency and the rate over it. Below 250 ms of generation there is no
+  rate: buffering providers (Bedrock) deliver short replies in a few chunks
+  and the number would measure chunking (seen: 83 tokens "at" 1300 tok/s).
+  Over longer outputs the measurement matches OpenRouter's /endpoints p50.
+  OpenRouter's `GET /generation` (server-side timing) was rejected: one extra
+  request per call, and the record lands seconds after the call.
+- The provider comes from the `provider` field OpenRouter puts on every chunk.
+  `llm/codex` reports timing too, without a provider.
+- Agent runs already emit one `EventUsage` per model call; voice keeps the
+  summed `Usage.LLM` and adds `Usage.LLMCalls`, sent on the NDJSON done line
+  as `usage.llm_calls` (and `usage.transcription`) with latency_ms,
+  duration_ms and tokens_per_second.
+- `Client.Models` and `Client.ModelEndpoints` (GET /models,
+  /models/{author}/{slug}/endpoints) are OpenRouter-only methods, not an `llm`
+  interface: no other client has a catalogue. Prices decode from OpenRouter's
+  decimal strings into `openrouter.USD`.
+- CLI: `aikido models [filter | author/slug]`, `--provider` on chat and agent,
+  and the usage line prints provider, latency, duration and throughput.
+
+**Consequences.** `llm.Usage` is no longer only accounting; summing code that
+copies it field by field (voice) must not add up timing. Speech
+(`/audio/speech`) has no Usage and gets no timing. Provider prefs apply to
+chat completions only, not to the images or speech endpoints.
