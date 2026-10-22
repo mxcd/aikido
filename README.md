@@ -16,6 +16,7 @@ Backed by OpenRouter in v1; designed so v2 can plug in direct providers (Anthrop
 - **`llm.Transcribe`** - speech-to-text over any client that accepts audio input (`llm.Message.Audio`, sent by `llm/openrouter` as `input_audio`), with `llm.AudioFormat` for browser MIME types and an `llm.Vocabulary` of expected terms that biases the prompt and corrects the transcript.
 - **`llm.SpeechGenerator`** - text-to-speech, implemented by `llm/openrouter` on `POST /api/v1/audio/speech` (ElevenLabs, OpenAI, Gemini and other TTS models).
 - **`llm.VideoGenerator`** - video generation (Veo, Kling, Seedance, Wan, ...), implemented by `llm/openrouter` on `POST /api/v1/videos`: submit, poll, download in one blocking call, text-to-video or first/last frame, `Client.VideoModels` for each model's accepted durations, resolutions and ratios.
+- **`llm.Decider`** - decision models (Jev, Perplexity decider, OpenAI luna-decisions, Cloudflare clef, ...) on OpenRouter's Decisions API (`POST /api/alpha/decisions`): typed questions (noul yes/no, choice, score, box) about a text or image state, answered with probabilities instead of prose; `Client.DecisionModels` lists them.
 - **`voice`** - one agent turn with speech in and/or out: transcription, per-sentence speech synthesis while the model still writes, typed events, cost over all stages, and an NDJSON `net/http` handler.
 - **`llm.Request.ResponseFormat`** - structured output (`llm.JSONSchema`), mapped by `llm/openrouter` and `llm/codex`.
 - **`llm/llmtest`** — `StubClient` for scripting multi-turn conversations in your tests.
@@ -175,6 +176,35 @@ t, err := llm.TranscribeDetailed(ctx, client, llm.TranscribeRequest{Audio: clip,
 
 A reply that is only a short bracketed phrase counts as no speech, so a
 German hint answering `[keine Sprache]` returns `""` as well.
+
+### Decisions
+
+Decision models answer typed questions about a state with calibrated
+probabilities, not prose, and bill input tokens only (Jev 1.14: 0.042 USD per
+million, about 0.00002 USD per call). `llm/openrouter` implements the optional
+`llm.Decider` capability on OpenRouter's alpha Decisions API; chat completions
+rejects these models.
+
+```go
+resp, err := client.Decide(ctx, llm.DecisionRequest{
+    Model: "typesafe/jev-1.14",
+    State: "Enterprise customer: checkout shows a blank page after Pay.",
+    // or []any{"The listing photo:", llm.ImagePart{Data: png, ContentType: "image/png"}}
+    Questions: map[string]llm.DecisionQuestion{
+        "is_bug":  llm.NoulQuestion("Is the customer reporting a software defect?"),
+        "team":    llm.ChoiceQuestion("Which team owns it?", map[string]string{
+            "payments": "Checkout, billing", "frontend": "Rendering, layout", "account": "Login"}),
+        "urgency": llm.ScoreQuestion("How urgent?", "can wait", "this week", "blocking revenue"),
+    },
+})
+// resp.Answers["is_bug"].Noul      0.95 (probability of yes)
+// resp.Answers["team"].Choice      "payments", .Probabilities, .Confidence
+// resp.Answers["urgency"].Score    1.99 (0 = first level), .Legend
+```
+
+`llm.BoxQuestion` locates a target in an image of the state (Jev 1.14+) and
+always returns a box, so pair it with a noul on presence. Provider routing
+(`WithProvider`) applies.
 
 ### Video generation
 
@@ -347,9 +377,20 @@ aikido image --ref logo.png --quality high "The same logo on a matte black mug."
 aikido video -d 4 -r 720p -a 16:9 --audio=false "A paper boat drifts across a pond."
 aikido video -m kwaivgi/kling-v3.0-pro --first-frame still.png "She blinks and smiles."
 aikido models --video kling
+aikido decide --noul 'is_bug=Is this a bug report?' \
+  --choice 'team=Which team owns it?=payments,frontend,account' \
+  --score 'urgency=How urgent?=can wait,this week,blocking revenue' \
+  'Checkout shows a blank page after I click Pay.'
+aikido models --decisions
 ```
 
 `aikido --help` for the full flag list. `chat` and `agent` accept `--model`, `--system`, `--max-tokens`, `--temperature`.
+
+`decide` defaults to `~typesafe/jev-latest` (`OPENROUTER_DECISION_MODEL` or
+`-m`); questions are `NAME=INSTRUCTIONS`, choice and score append
+`=A,B,...`, `--box` with `--image` locates a target, the state comes from the
+arguments or stdin. CLI choice options carry their name only; give options a
+description through the library for better picks.
 
 `video` defaults to `google/veo-3.1-lite` (`OPENROUTER_VIDEO_MODEL` or `-m`
 overrides it), writes `out/video-<timestamp>.mp4` and prints cost, wall time

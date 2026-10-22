@@ -791,3 +791,53 @@ audio, 0.12 USD, 38 s wall clock.
 Not covered: `callback_url` webhooks, provider passthrough options, multiple
 outputs per job (only index 0 is downloaded), video input (FLUX Video Edit),
 and a download size cap. hub-sandbox can drop `internal/ai/video` for this.
+
+## ADR-036 - Decision models as an optional `Decider` capability
+
+**Date:** 22.10.2026
+**Status:** Accepted
+
+**Context.** OpenRouter serves decision models (typesafe/jev-1.14 and
+`~typesafe/jev-latest`, perplexity/pplx-decider, openai/gpt-6-luna-decisions,
+cloudflare/clef, liquid/d1, inception/mercury-decide, ...) on an alpha
+Decisions API, `POST /api/alpha/decisions`, which sits outside `/api/v1`.
+Chat completions rejects them, and they are missing from the plain
+`GET /models` list (`?output_modalities=decisions` lists them). A request is
+`model`, `state` (string, object or array; images as
+`{image_url: {url}}` items), `questions` keyed by name with a `type` of
+`noul` (optional criteria `true`/`false`), `choice` (criteria map, required),
+`score` (ordered criteria list, required) or `box` (no criteria, Jev 1.14+),
+plus the usual `provider` block. Answers come keyed by the same names:
+noul probability, choice with per-option probabilities and confidence, score
+as a probability-weighted index with legend, box as fractions of the image.
+Usage has input/output tokens and cost; output tokens are free. Verified live
+on 22.10.2026 with jev-1.14 (choice/noul/score/box, image state) and
+pplx-decider-flash-v1.2: about 0.4-0.9 s and 0.00002 USD per call. A 422 from
+the provider (empty criteria) arrives as a JSON error envelope.
+
+**Decision.**
+- `llm.Decider` with `Decide(ctx, DecisionRequest) (DecisionResponse, error)`,
+  optional like `ImageGenerator` (ADR-029). `openrouter.Client` and
+  `llmtest.StubClient` implement it.
+- `DecisionQuestion` is one struct with `Kind`, `Instructions`, `Options`
+  (choice, noul) and `Levels` (score), built through `NoulQuestion`,
+  `ChoiceQuestion`, `ScoreQuestion` and `BoxQuestion`. Instructions and
+  criteria are strings; the API's structured (object/array) guidance is not
+  exposed until a caller needs it. Per-kind rules are checked before the call.
+- `State` is `any`; ImagePart items in a `[]any` state become the wire image
+  object, so images need no OpenRouter type in caller code.
+- `DecisionAnswer` is one flat struct per answer with the API's names (`Noul`
+  is the probability of yes). A question without an answer is an
+  ErrServerError rather than a zero value the caller would branch on.
+- `Usage`: tokens, cost, provider, call duration; no TokensPerSecond, a few
+  answer tokens over the call is not a rate.
+- `Client.do` now takes the full URL, so the alpha path is built from the API
+  root (`BaseURL` minus `/v1`); provider routing (ADR-034) applies.
+- `Client.DecisionModels` (OpenRouter-only, like `Models`). CLI:
+  `aikido decide` (default `~typesafe/jev-latest`, `OPENROUTER_DECISION_MODEL`)
+  and `aikido models --decisions`.
+
+**Consequences.** Additive surface. The endpoint is alpha: a contract change
+lands here first. Not covered: `session_id`, `user`, `trace`, the TypeSafe
+compatible `/api/v1/systemone` endpoint, and decision questions as an agent
+tool.
