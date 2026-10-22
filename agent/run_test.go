@@ -653,3 +653,25 @@ func TestSessionOptions_ThinkingReachesEveryCall(t *testing.T) {
 		t.Fatalf("effort = %q, want low", got)
 	}
 }
+
+func TestRunOptions_ThinkingOverridesSession(t *testing.T) {
+	turn := func() llmtest.TurnScript {
+		return llmtest.TurnScript{Events: []llm.Event{{Kind: llm.EventTextDelta, Text: "ok"}, {Kind: llm.EventEnd}}}
+	}
+	stub := llmtest.NewStubClient(turn(), turn())
+	s := newTestSession(t, stub, nil, nil, func(o *SessionOptions) {
+		o.Thinking = llm.ThinkingByEffort(llm.ThinkingEffortLow)
+	})
+	ch, _ := s.RunWithOptions(context.Background(), "hard one", &RunOptions{Thinking: llm.ThinkingByEffort(llm.ThinkingEffortHigh)})
+	collectEvents(t, ch)
+	ch, _ = s.Run(context.Background(), "easy one")
+	collectEvents(t, ch)
+
+	reqs := stub.Requests()
+	if got := reqs[0].Thinking.Effort(); got != llm.ThinkingEffortHigh {
+		t.Errorf("run with override: effort = %q, want high", got)
+	}
+	if got := reqs[1].Thinking.Effort(); got != llm.ThinkingEffortLow {
+		t.Errorf("next run: effort = %q, want the session's low", got)
+	}
+}

@@ -31,16 +31,19 @@ type RunOptions struct {
 	// only, e.g. a reply-style instruction for a spoken answer. It is never
 	// written to History.
 	SystemSuffix string
+	// Thinking replaces SessionOptions.Thinking for this run's model calls.
+	// Nil keeps the session's setting.
+	Thinking *llm.ThinkingConfig
 }
 
 // RunWithOptions is Run with per-run options. A nil opts is Run.
 func (s *Session) RunWithOptions(ctx context.Context, userText string, opts *RunOptions) (<-chan Event, error) {
-	var suffix string
+	var ro RunOptions
 	if opts != nil {
-		suffix = opts.SystemSuffix
+		ro = *opts
 	}
 	out := make(chan Event, 16)
-	go s.runLoop(ctx, out, userText, nil, true, suffix)
+	go s.runLoop(ctx, out, userText, nil, true, ro)
 	return out, nil
 }
 
@@ -53,11 +56,11 @@ func (s *Session) RunWithOptions(ctx context.Context, userText string, opts *Run
 // to assemble the produced messages.
 func (s *Session) RunWithMessages(ctx context.Context, history []llm.Message) (<-chan Event, error) {
 	out := make(chan Event, 16)
-	go s.runLoop(ctx, out, "", history, false, "")
+	go s.runLoop(ctx, out, "", history, false, RunOptions{})
 	return out, nil
 }
 
-func (s *Session) runLoop(userCtx context.Context, out chan<- Event, userText string, customHistory []llm.Message, useHistoryStore bool, systemSuffix string) {
+func (s *Session) runLoop(userCtx context.Context, out chan<- Event, userText string, customHistory []llm.Message, useHistoryStore bool, ro RunOptions) {
 	defer close(out)
 
 	// Build runCtx with RunTimeout cap.
@@ -88,13 +91,18 @@ func (s *Session) runLoop(userCtx context.Context, out chan<- Event, userText st
 		hist = customHistory
 	}
 
+	thinking := s.opts.Thinking
+	if ro.Thinking != nil {
+		thinking = ro.Thinking
+	}
+
 	msgs := make([]llm.Message, 0, len(hist)+2)
 	system := s.opts.SystemPrompt
-	if systemSuffix != "" {
+	if ro.SystemSuffix != "" {
 		if system != "" {
 			system += "\n\n"
 		}
-		system += systemSuffix
+		system += ro.SystemSuffix
 	}
 	if system != "" {
 		msgs = append(msgs, llm.Message{Role: llm.RoleSystem, Content: system})
@@ -128,7 +136,7 @@ func (s *Session) runLoop(userCtx context.Context, out chan<- Event, userText st
 			Tools:       toolDefs,
 			MaxTokens:   s.opts.MaxTokens,
 			Temperature: s.opts.Temperature,
-			Thinking:    s.opts.Thinking,
+			Thinking:    thinking,
 		}
 
 		events, streamErr := s.opts.Client.Stream(callCtx, req)
