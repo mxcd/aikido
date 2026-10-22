@@ -650,3 +650,50 @@ first audible word.
 it. The NDJSON shape is part of the public surface (documented on `Handler`).
 Not covered: barge-in, realtime streaming STT, per-request voice or model
 override (build a second Pipeline), abbreviation-aware sentence splitting.
+
+## ADR-033 - grep, glob and edit_file as default VFS tools; `vfs/osfs`
+
+**Date:** 22.10.2026
+**Status:** Accepted. Supersedes the "no brute-force grep" part of ADR-020.
+
+**Context.** Agents working on files want the tool shapes models are trained
+on (Claude Code, Codex): regex search, path globbing, exact-string edits and
+ranged reads. With only read/write/list/delete/search, a one-line change means
+rewriting the whole file and `read_file` returns unbounded content. There was
+also no backend for a real directory on disk.
+
+**Decision.**
+- `RegisterVFSTools` registers `grep`, `glob` and (unless `ReadOnly`)
+  `edit_file` by default; `VFSToolOptions.DisableExtended` opts out. The
+  caller already opted in to file tools by calling it, so aikido still forces
+  no tools on anyone.
+- All tools are pure Go over `vfs.Storage`, no exec: they work on any backend
+  and inherit its scoping. No `sed`: models misquote its escaping;
+  `edit_file` takes `old_string`/`new_string`, fails on zero or ambiguous
+  matches unless `replace_all`, refuses binary files, keeps the content type
+  and enforces `MaxFileBytes`.
+- `grep` (RE2, `path_glob`, `case_insensitive`, `context` 0-5, `output_mode`
+  content / files_with_matches / count) brute-forces `ListFiles` + `ReadFile`.
+  ADR-020 rejected that for network backends; the cost is now bounded instead:
+  at most 200 entries, lines cut at 500 runes, and the scan stops after 32 MiB
+  read, each reported as `truncated: true`. A `vfs.Greppable` capability is
+  deferred until a backend needs native grep. Binary files (NUL in the first
+  8 KiB or invalid UTF-8) are skipped.
+- `glob` supports `*`, `**`, `?`, `{a,b}` via an in-house glob-to-regexp
+  converter (no dependency), sorted, at most 500 paths.
+- `read_file` takes `offset`/`limit` (lines, default limit 2000) and returns
+  `total_lines` and `truncated`. Content stays raw (no line-number prefixes),
+  so `edit_file` strings can be copied from it.
+- `list_files`, `search`, `grep` and `glob` all filter by `HideHiddenPaths`
+  and `AllowedExtensions` (list_files and search used to ignore the latter).
+- `vfs/osfs.New(dir)` implements `vfs.Storage` over `os.Root` (Go 1.25):
+  no symlink or `..` escapes, atomic temp-file-plus-rename writes, parent
+  directories created on write, `.git` skipped when listing, content type
+  inferred from the extension (`vfs.ContentTypeFor`, now shared by embedfs and
+  the agent tools). It is not `Searchable`.
+
+**Consequences.** Callers that bump to v0.7.0 get three more tools in their
+tool list (more prompt tokens) and a 2000-line default on `read_file`.
+Consumers that pin the tool name list (Hub `internal/nexi` drift guard) must
+add `grep`, `glob`, `edit_file` or set `DisableExtended`. `go.mod` requires Go
+1.25.

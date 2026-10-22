@@ -798,14 +798,17 @@ func Drain(events <-chan Event) ([]llm.Message, error)
 // VFSToolOptions configure the built-in VFS tools.
 type VFSToolOptions struct {
     Storage           vfs.Storage // required; pre-bound to scope if multi-tenant
-    HideHiddenPaths   bool        // hide _* and . paths from list/search; default true
-    AllowedExtensions []string    // nil = allow all
+    HideHiddenPaths   bool        // hide _* and . paths from list/glob/grep/search
+    AllowedExtensions []string    // nil = allow all; also filters list/glob/grep/search
     MaxFileBytes      int64       // default 1 MiB
+    ReadOnly          bool        // skip write_file, edit_file, delete_file
+    DisableExtended   bool        // skip grep, glob, edit_file (ADR-033)
 }
 
-// RegisterVFSTools registers read_file, write_file, list_files, delete_file
-// into the supplied registry. If opts.Storage satisfies vfs.Searchable, also
-// registers `search`. Tool handlers capture opts.Storage via closure (ADR-021).
+// RegisterVFSTools registers read_file, list_files, grep and glob, plus
+// write_file, delete_file and edit_file when not read-only. If opts.Storage
+// satisfies vfs.Searchable, also registers `search`. Tool handlers capture
+// opts.Storage via closure (ADR-021).
 func RegisterVFSTools(reg *tools.Registry, opts *VFSToolOptions) error
 ```
 

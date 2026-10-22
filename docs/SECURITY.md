@@ -22,7 +22,7 @@ The agent's tool surface in v1 is intentionally narrow.
 
 ### What aikido tools can do
 
-- Read, write, delete, list, search files via the supplied `vfs.Storage` (which the caller may have pre-bound to a tenant scope via `vfs.ScopedStorage.Scope`).
+- Read (in line ranges), write, edit (exact string replace), delete, list, glob, grep and search files via the supplied `vfs.Storage` (which the caller may have pre-bound to a tenant scope via `vfs.ScopedStorage.Scope`).
 - Call user-supplied custom tools registered with `tools.Registry`.
 
 ### What aikido tools cannot do
@@ -56,7 +56,7 @@ User-implemented `Storage` backends should call `vfs.ValidatePath` themselves on
 
 ## Hidden-path convention
 
-Paths starting with `_` or `.` are considered library-managed or hidden. The default `agent.VFSToolOptions.HideHiddenPaths = true` causes the built-in `list_files` and `search` tools to filter them out of model-visible results. The model can still write to these paths if it constructs them explicitly — hiding is a cosmetic default, not a security boundary.
+Paths starting with `_` or `.` are considered library-managed or hidden. The default `agent.VFSToolOptions.HideHiddenPaths = true` causes the built-in `list_files`, `glob`, `grep` and `search` tools to filter them out of model-visible results. The model can still write to these paths if it constructs them explicitly — hiding is a cosmetic default, not a security boundary.
 
 The note-then-consolidate recipe (PATTERNS.md) writes to `_notes/{turn-uuid}.md` and relies on this convention so its bookkeeping does not pollute the model's view of the workspace.
 

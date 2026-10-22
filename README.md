@@ -22,7 +22,8 @@ Backed by OpenRouter in v1; designed so v2 can plug in direct providers (Anthrop
 - **`vfs`** — minimal four-method `Storage` interface plus optional `ScopedStorage` and `Searchable` capabilities. Bundled backends:
   - **`vfs/memory`** — read/write in-process.
   - **`vfs/embedfs`** — wraps any `fs.FS` (`embed.FS`, `fs.Sub`, `fstest.MapFS`); read-only.
-- **`agent`** — `Session` with pluggable `History` and `Locker`, two-tier timeouts (`RunTimeout` + `LLMCallTimeout`), strict error policy, single end-of-turn variadic `History.Append`. Built-in VFS tools: `read_file`, `write_file`, `list_files`, `delete_file`, `search`. Toggle `ReadOnly: true` to expose only read tools.
+  - **`vfs/osfs`** — a directory on the local disk, confined by `os.Root`; atomic writes.
+- **`agent`** — `Session` with pluggable `History` and `Locker`, two-tier timeouts (`RunTimeout` + `LLMCallTimeout`), strict error policy, single end-of-turn variadic `History.Append`. Built-in VFS tools: `read_file` (line ranges), `write_file`, `edit_file` (exact string replace), `list_files`, `delete_file`, `grep` (RE2), `glob`, plus `search` when the storage is `Searchable`. Toggle `ReadOnly: true` to expose only read tools, `DisableExtended: true` to drop `grep`/`glob`/`edit_file`.
 - **`cmd/aikido`** — CLI built on `urfave/cli/v3` with `chat`, `agent`, `image`, and `skill` subcommands.
 
 See [docs/v1/API.md](docs/v1/API.md) for the locked surface.
@@ -265,7 +266,7 @@ storage  := embedfs.NewStorage(knowledge)
 registry := tools.NewRegistry()
 _ = agent.RegisterVFSTools(registry, &agent.VFSToolOptions{
     Storage:  storage,
-    ReadOnly: true, // skip write_file + delete_file
+    ReadOnly: true, // skip write_file, edit_file, delete_file
 })
 
 session, _ := agent.NewLocalSession(&agent.SessionOptions{
@@ -275,7 +276,7 @@ session, _ := agent.NewLocalSession(&agent.SessionOptions{
 })
 ```
 
-The model can `search`, `list_files`, and `read_file` against the embedded markdown — but cannot mutate it. Defense in depth: `vfs/embedfs` would also reject mutations even if the tools were registered.
+The model can `search`, `grep`, `glob`, `list_files`, and `read_file` against the embedded markdown — but cannot mutate it. Defense in depth: `vfs/embedfs` would also reject mutations even if the tools were registered.
 
 ### ChatGPT subscription (`llm/codex`)
 
