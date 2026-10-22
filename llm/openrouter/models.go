@@ -143,7 +143,7 @@ func (c *Client) ModelEndpoints(ctx context.Context, id string) (ModelEndpoints,
 
 // getJSON GETs path and decodes the JSON body into v.
 func (c *Client) getJSON(ctx context.Context, path string, v any) error {
-	raw, _, err := c.do(ctx, http.MethodGet, path, nil, "application/json")
+	raw, _, err := c.do(ctx, http.MethodGet, path, nil, "application/json", http.StatusOK)
 	if err != nil {
 		return err
 	}

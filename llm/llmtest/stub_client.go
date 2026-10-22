@@ -39,8 +39,15 @@ type SpeechScript struct {
 	Err      error
 }
 
+// VideoScript is one scripted GenerateVideo outcome. Err short-circuits the
+// call; otherwise Response is returned verbatim.
+type VideoScript struct {
+	Response llm.VideoResponse
+	Err      error
+}
+
 // StubClient is a scriptable llm.Client that also implements the optional
-// llm.ImageGenerator and llm.SpeechGenerator capabilities.
+// llm.ImageGenerator, llm.SpeechGenerator and llm.VideoGenerator capabilities.
 type StubClient struct {
 	mu            sync.Mutex
 	turns         []TurnScript
@@ -52,12 +59,16 @@ type StubClient struct {
 	speech        []SpeechScript
 	speechCursor  int
 	speechReqs    []llm.SpeechRequest
+	videos        []VideoScript
+	videoCursor   int
+	videoReqs     []llm.VideoRequest
 }
 
 var (
 	_ llm.Client          = (*StubClient)(nil)
 	_ llm.ImageGenerator  = (*StubClient)(nil)
 	_ llm.SpeechGenerator = (*StubClient)(nil)
+	_ llm.VideoGenerator  = (*StubClient)(nil)
 )
 
 // NewStubClient returns a StubClient that plays the given turn scripts in order.
@@ -215,5 +226,36 @@ func (s *StubClient) Speak(_ context.Context, req llm.SpeechRequest) (llm.Speech
 	script := s.speech[s.speechCursor]
 	s.speechCursor++
 	s.speechReqs = append(s.speechReqs, req)
+	return script.Response, script.Err
+}
+
+// ScriptVideos appends video scripts consumed by GenerateVideo in order.
+func (s *StubClient) ScriptVideos(scripts ...VideoScript) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.videos = append(s.videos, scripts...)
+}
+
+// VideoRequests returns a snapshot of every llm.VideoRequest the stub has been
+// called with, in order.
+func (s *StubClient) VideoRequests() []llm.VideoRequest {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]llm.VideoRequest, len(s.videoReqs))
+	copy(out, s.videoReqs)
+	return out
+}
+
+// GenerateVideo consumes one VideoScript. Returns ErrStubExhausted when no
+// video scripts remain.
+func (s *StubClient) GenerateVideo(_ context.Context, req llm.VideoRequest) (llm.VideoResponse, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.videoCursor >= len(s.videos) {
+		return llm.VideoResponse{}, ErrStubExhausted
+	}
+	script := s.videos[s.videoCursor]
+	s.videoCursor++
+	s.videoReqs = append(s.videoReqs, req)
 	return script.Response, script.Err
 }

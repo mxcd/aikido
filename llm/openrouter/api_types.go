@@ -443,3 +443,38 @@ type speechRequest struct {
 	ResponseFormat string   `json:"response_format,omitempty"`
 	Speed          *float32 `json:"speed,omitempty"`
 }
+
+// videoRequest is the POST /videos body.
+type videoRequest struct {
+	Model           string          `json:"model"`
+	Prompt          string          `json:"prompt"`
+	AspectRatio     string          `json:"aspect_ratio,omitempty"`
+	Resolution      string          `json:"resolution,omitempty"`
+	Size            string          `json:"size,omitempty"`
+	Duration        int             `json:"duration,omitempty"`
+	GenerateAudio   *bool           `json:"generate_audio,omitempty"`
+	Seed            *int            `json:"seed,omitempty"`
+	FrameImages     []apiFrameImage `json:"frame_images,omitempty"`
+	InputReferences []apiImagePart  `json:"input_references,omitempty"`
+}
+
+// apiFrameImage anchors a clip; FrameType is "first_frame" or "last_frame".
+type apiFrameImage struct {
+	Type      string       `json:"type"`
+	ImageURL  *apiImageURL `json:"image_url"`
+	FrameType string       `json:"frame_type"`
+}
+
+// videoJob is both the 202 submit answer and GET /videos/{id}. Status walks
+// pending, in_progress, completed or failed. Error is a string on some
+// providers and an object on others.
+type videoJob struct {
+	ID           string          `json:"id"`
+	Status       string          `json:"status"`
+	UnsignedURLs []string        `json:"unsigned_urls"`
+	URLs         []string        `json:"urls"`
+	Error        json.RawMessage `json:"error"`
+	Usage        *struct {
+		Cost float64 `json:"cost"`
+	} `json:"usage"`
+}

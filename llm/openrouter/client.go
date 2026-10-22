@@ -51,9 +51,13 @@ type Options struct {
 
 	// MaxAttempts is the total number of HTTP attempts per call on 429, 5xx
 	// and network errors, on every path (Stream, Complete, transcription,
-	// images, speech). 0 keeps the default of 3; 1 disables retry, for
+	// images, speech, each video submit/poll/download request). 0 keeps the default of 3; 1 disables retry, for
 	// callers that run their own job-level retry. Negative is treated as 1.
 	MaxAttempts int
+
+	// VideoPollInterval is how often GenerateVideo polls a running job.
+	// 0 keeps the default of 3 s.
+	VideoPollInterval time.Duration
 }
 
 // Client is an OpenRouter implementation of llm.Client.
@@ -65,6 +69,7 @@ type Client struct {
 	xTitle      string
 	provider    *ProviderPrefs
 	maxAttempts int
+	videoPoll   time.Duration
 }
 
 // Compile-time conformance.
@@ -83,6 +88,7 @@ func NewClient(opts *Options) (*Client, error) {
 		xTitle:      opts.XTitle,
 		provider:    opts.Provider,
 		maxAttempts: opts.MaxAttempts,
+		videoPoll:   opts.VideoPollInterval,
 	}
 	if c.provider == nil {
 		c.provider = prefsFromOrder(opts.ProviderOrder)
@@ -92,6 +98,9 @@ func NewClient(opts *Options) (*Client, error) {
 	}
 	if c.httpClient == nil {
 		c.httpClient = &http.Client{Timeout: 0}
+	}
+	if c.videoPoll <= 0 {
+		c.videoPoll = 3 * time.Second
 	}
 	return c, nil
 }
@@ -227,11 +236,13 @@ func (c *Client) postJSON(ctx context.Context, path string, body []byte) ([]byte
 // post is postJSON with a caller-chosen Accept header that also returns the
 // response headers, for endpoints whose 200 body is not JSON (speech).
 func (c *Client) post(ctx context.Context, path string, body []byte, accept string) ([]byte, http.Header, error) {
-	return c.do(ctx, http.MethodPost, path, body, accept)
+	return c.do(ctx, http.MethodPost, path, body, accept, http.StatusOK)
 }
 
-// do sends one request with retry and returns the 200 body and headers.
-func (c *Client) do(ctx context.Context, method, path string, body []byte, accept string) ([]byte, http.Header, error) {
+// do sends one request with retry and returns the body and headers of an
+// answer with status want. Any other status is an error, so an unexpected 201
+// is never parsed as a result (ADR-029); only the video submit wants 202.
+func (c *Client) do(ctx context.Context, method, path string, body []byte, accept string, want int) ([]byte, http.Header, error) {
 	var (
 		raw    []byte
 		header http.Header
@@ -250,7 +261,7 @@ func (c *Client) do(ctx context.Context, method, path string, body []byte, accep
 			// Network-layer errors are transient, so treat them as 5xx-class.
 			return fmt.Errorf("openrouter: http error: %w", llm.ErrServerError)
 		}
-		if r.StatusCode != http.StatusOK {
+		if r.StatusCode != want {
 			// classifyHTTPError closes the body.
 			return classifyHTTPError(r)
 		}
