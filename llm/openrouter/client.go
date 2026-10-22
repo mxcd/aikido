@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"time"
 
 	"github.com/mxcd/aikido/llm"
 	"github.com/mxcd/aikido/retry"
@@ -38,10 +39,14 @@ type Options struct {
 	// XTitle is the optional OpenRouter ranking-attribution header.
 	XTitle string
 
-	// ProviderOrder is the optional `provider.order` routing preference.
-	// A single entry locks to one provider (allow_fallbacks=false); multiple
-	// entries form a fallback chain (allow_fallbacks=true). Matches the
-	// production pattern in asolabs/hub.
+	// Provider is the default provider-routing block for chat calls; a
+	// context from WithProvider overrides it per call.
+	Provider *ProviderPrefs
+
+	// ProviderOrder is shorthand for Provider when only the order matters:
+	// a single entry locks to one provider (allow_fallbacks=false), multiple
+	// entries form a fallback chain (allow_fallbacks=true). Ignored when
+	// Provider is set.
 	ProviderOrder []string
 
 	// MaxAttempts is the total number of HTTP attempts per call on 429, 5xx
@@ -58,7 +63,7 @@ type Client struct {
 	httpClient  *http.Client
 	httpReferer string
 	xTitle      string
-	provOrder   []string
+	provider    *ProviderPrefs
 	maxAttempts int
 }
 
@@ -76,8 +81,11 @@ func NewClient(opts *Options) (*Client, error) {
 		httpClient:  opts.HTTPClient,
 		httpReferer: opts.HTTPReferer,
 		xTitle:      opts.XTitle,
-		provOrder:   append([]string(nil), opts.ProviderOrder...),
+		provider:    opts.Provider,
 		maxAttempts: opts.MaxAttempts,
+	}
+	if c.provider == nil {
+		c.provider = prefsFromOrder(opts.ProviderOrder)
 	}
 	if c.baseURL == "" {
 		c.baseURL = DefaultBaseURL
@@ -96,7 +104,8 @@ func NewClient(opts *Options) (*Client, error) {
 // per retryPolicy (Options.MaxAttempts). Mid-stream errors do NOT retry;
 // they propagate as EventError.
 func (c *Client) Stream(ctx context.Context, req llm.Request) (<-chan llm.Event, error) {
-	body, err := c.buildBody(req, true)
+	start := time.Now()
+	body, err := c.buildBody(ctx, req, true)
 	if err != nil {
 		return nil, fmt.Errorf("openrouter: build request: %w", err)
 	}
@@ -132,7 +141,7 @@ func (c *Client) Stream(ctx context.Context, req llm.Request) (<-chan llm.Event,
 	go func() {
 		defer close(out)
 		defer resp.Body.Close()
-		processStream(ctx, resp.Body, out)
+		processStream(ctx, resp.Body, out, start)
 	}()
 	return out, nil
 }
@@ -154,7 +163,7 @@ func (c *Client) setHeaders(req *http.Request) {
 // stream selects SSE-streaming (true) or single-shot JSON (false). With
 // stream=false the wire field is omitted via omitempty, which OpenRouter
 // treats as non-streaming — that's the contract Complete relies on.
-func (c *Client) buildBody(req llm.Request, stream bool) ([]byte, error) {
+func (c *Client) buildBody(ctx context.Context, req llm.Request, stream bool) ([]byte, error) {
 	msgs, err := buildAPIMessages(req.Messages)
 	if err != nil {
 		return nil, err
@@ -188,15 +197,7 @@ func (c *Client) buildBody(req llm.Request, stream bool) ([]byte, error) {
 	if eff := effortFromConfig(req.Thinking); eff != "" {
 		cr.Reasoning = &apiReasoning{Effort: eff}
 	}
-	if len(c.provOrder) > 0 {
-		ap := &apiProvider{Order: append([]string(nil), c.provOrder...)}
-		// asolabs/hub pattern: a single-entry order means "lock to this
-		// provider" (no fallbacks); multi-entry means "try them in order
-		// with fallbacks enabled."
-		fallbacks := len(c.provOrder) > 1
-		ap.AllowFallbacks = &fallbacks
-		cr.Provider = ap
-	}
+	cr.Provider = c.providerPrefs(ctx)
 	return json.Marshal(cr)
 }
 
@@ -226,12 +227,17 @@ func (c *Client) postJSON(ctx context.Context, path string, body []byte) ([]byte
 // post is postJSON with a caller-chosen Accept header that also returns the
 // response headers, for endpoints whose 200 body is not JSON (speech).
 func (c *Client) post(ctx context.Context, path string, body []byte, accept string) ([]byte, http.Header, error) {
+	return c.do(ctx, http.MethodPost, path, body, accept)
+}
+
+// do sends one request with retry and returns the 200 body and headers.
+func (c *Client) do(ctx context.Context, method, path string, body []byte, accept string) ([]byte, http.Header, error) {
 	var (
 		raw    []byte
 		header http.Header
 	)
 	err := retry.Do(ctx, c.retryPolicy(), func(_ int) error {
-		httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+path, bytes.NewReader(body))
+		httpReq, err := http.NewRequestWithContext(ctx, method, c.baseURL+path, bytes.NewReader(body))
 		if err != nil {
 			return fmt.Errorf("openrouter: build http request: %w", err)
 		}

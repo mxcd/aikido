@@ -24,6 +24,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/mxcd/aikido/llm"
 	"github.com/mxcd/aikido/retry"
@@ -80,6 +81,7 @@ func NewClient(o *Options) (*Client, error) {
 // Stream sends one request and returns its events; EventEnd comes last.
 // 429 and 5xx at stream start are retried, mid-stream errors are not.
 func (c *Client) Stream(ctx context.Context, req llm.Request) (<-chan llm.Event, error) {
+	start := time.Now()
 	body, err := buildBody(req)
 	if err != nil {
 		return nil, err
@@ -100,7 +102,7 @@ func (c *Client) Stream(ctx context.Context, req llm.Request) (<-chan llm.Event,
 	go func() {
 		defer close(out)
 		defer resp.Body.Close()
-		processStream(ctx, resp.Body, out)
+		processStream(ctx, resp.Body, out, start)
 	}()
 	return out, nil
 }
@@ -327,13 +329,14 @@ type streamEvent struct {
 // processStream turns the Responses SSE into llm events and always ends with
 // exactly one EventEnd. Text arrives as output_text deltas; the .done event
 // only counts when no delta came (response.completed carries no output).
-func processStream(ctx context.Context, body io.Reader, out chan<- llm.Event) {
+func processStream(ctx context.Context, body io.Reader, out chan<- llm.Event, start time.Time) {
 	finish := ""
 	defer func() { emit(ctx, out, llm.Event{Kind: llm.EventEnd, FinishReason: finish}) }()
 
 	scanner := bufio.NewScanner(body)
 	scanner.Buffer(make([]byte, 0, 64*1024), 4<<20)
 	sawDelta := false
+	var firstOutput time.Time
 	for scanner.Scan() {
 		data, ok := strings.CutPrefix(scanner.Text(), "data:")
 		if !ok {
@@ -346,6 +349,9 @@ func processStream(ctx context.Context, body io.Reader, out chan<- llm.Event) {
 		switch ev.Type {
 		case "response.output_text.delta":
 			sawDelta = true
+			if firstOutput.IsZero() {
+				firstOutput = time.Now()
+			}
 			if !emit(ctx, out, llm.Event{Kind: llm.EventTextDelta, Text: ev.Delta}) {
 				return
 			}
@@ -364,6 +370,7 @@ func processStream(ctx context.Context, body io.Reader, out chan<- llm.Event) {
 					if u.InputTokensDetails != nil {
 						usage.CacheReadTokens = u.InputTokensDetails.CachedTokens
 					}
+					usage.SetTiming(start, firstOutput, time.Now())
 					emit(ctx, out, llm.Event{Kind: llm.EventUsage, Usage: usage})
 				}
 			}

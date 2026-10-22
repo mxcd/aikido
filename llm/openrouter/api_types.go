@@ -21,7 +21,7 @@ type chatRequest struct {
 	Temperature *float32         `json:"temperature,omitempty"`
 	Stop        []string         `json:"stop,omitempty"`
 	Reasoning   *apiReasoning    `json:"reasoning,omitempty"`
-	Provider    *apiProvider     `json:"provider,omitempty"`
+	Provider    *ProviderPrefs   `json:"provider,omitempty"`
 	Modalities  []string         `json:"modalities,omitempty"`
 	ImageConfig *apiImageConfig  `json:"image_config,omitempty"`
 	Usage       *apiUsageOptions `json:"usage,omitempty"`
@@ -67,13 +67,6 @@ type apiReasoning struct {
 	Effort string `json:"effort,omitempty"`
 }
 
-// apiProvider configures OpenRouter's provider-routing block. Populated when
-// Options.ProviderOrder is non-empty.
-type apiProvider struct {
-	Order          []string `json:"order,omitempty"`
-	AllowFallbacks *bool    `json:"allow_fallbacks,omitempty"`
-}
-
 // apiMessage is the OpenAI-compatible message shape. Content is RawMessage so
 // it can carry either a JSON string (text-only) or a JSON array (multimodal /
 // cache_control-tagged content blocks).
@@ -110,10 +103,12 @@ type apiFunction struct {
 // --- streaming response shapes ---
 
 type streamChunk struct {
-	ID      string         `json:"id,omitempty"`
-	Object  string         `json:"object,omitempty"`
-	Choices []streamChoice `json:"choices,omitempty"`
-	Usage   *apiUsage      `json:"usage,omitempty"`
+	ID     string `json:"id,omitempty"`
+	Object string `json:"object,omitempty"`
+	// Provider names the upstream provider that served the generation.
+	Provider string         `json:"provider,omitempty"`
+	Choices  []streamChoice `json:"choices,omitempty"`
+	Usage    *apiUsage      `json:"usage,omitempty"`
 	// Top-level error envelope on mid-stream errors.
 	Error *apiError `json:"error,omitempty"`
 }
@@ -136,6 +131,13 @@ type streamDelta struct {
 	ToolCalls []toolCallFragment `json:"tool_calls,omitempty"`
 	Reasoning string             `json:"reasoning,omitempty"`
 	Images    []apiImagePart     `json:"images,omitempty"`
+}
+
+// hasOutput reports whether the delta carries generated output, as opposed
+// to a role-only or empty opening chunk. It marks the call's first token.
+func (d streamDelta) hasOutput() bool {
+	c := string(d.Content)
+	return (c != "" && c != `""` && c != "null") || d.Reasoning != "" || len(d.ToolCalls) > 0 || len(d.Images) > 0
 }
 
 // apiImagePart is the OpenRouter assistant image envelope, present on either
@@ -207,6 +209,15 @@ type apiError struct {
 // errorEnvelope is the JSON envelope OpenRouter wraps non-200 responses in.
 type errorEnvelope struct {
 	Error apiError `json:"error"`
+}
+
+// chunkUsage is toLLMUsage plus the provider that served the chunk.
+func chunkUsage(c *streamChunk) *llm.Usage {
+	u := toLLMUsage(c.Usage)
+	if u != nil {
+		u.Provider = c.Provider
+	}
+	return u
 }
 
 // toLLMUsage maps the wire usage onto the locked llm.Usage shape.

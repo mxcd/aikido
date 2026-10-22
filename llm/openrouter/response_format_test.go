@@ -1,6 +1,7 @@
 package openrouter
 
 import (
+	"context"
 	"encoding/json"
 	"testing"
 
@@ -15,7 +16,7 @@ func TestBuildBody_ResponseFormat(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, stream := range []bool{true, false} {
-		raw, err := c.buildBody(llm.Request{
+		raw, err := c.buildBody(context.Background(), llm.Request{
 			Model:    "m",
 			Messages: []llm.Message{{Role: llm.RoleUser, Content: "hi"}},
 			ResponseFormat: &llm.JSONSchema{
@@ -45,7 +46,7 @@ func TestBuildBody_ResponseFormat(t *testing.T) {
 		}
 	}
 
-	raw, _ := c.buildBody(llm.Request{Model: "m", Messages: []llm.Message{{Role: llm.RoleUser, Content: "hi"}}}, true)
+	raw, _ := c.buildBody(context.Background(), llm.Request{Model: "m", Messages: []llm.Message{{Role: llm.RoleUser, Content: "hi"}}}, true)
 	var plain map[string]any
 	_ = json.Unmarshal(raw, &plain)
 	if _, ok := plain["response_format"]; ok {

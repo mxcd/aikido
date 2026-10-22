@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"time"
 
 	"github.com/mxcd/aikido/llm"
 )
@@ -25,7 +26,8 @@ import (
 // errors are mapped onto ErrServerError so CompleteWithRetry can apply the
 // same retry policy as CollectWithRetry.
 func (c *Client) Complete(ctx context.Context, req llm.Request) (llm.Response, error) {
-	body, err := c.buildBody(req, false)
+	start := time.Now()
+	body, err := c.buildBody(ctx, req, false)
 	if err != nil {
 		return llm.Response{}, fmt.Errorf("openrouter: build request: %w", err)
 	}
@@ -34,7 +36,11 @@ func (c *Client) Complete(ctx context.Context, req llm.Request) (llm.Response, e
 	if err != nil {
 		return llm.Response{}, err
 	}
-	return parseCompleteResponse(raw)
+	resp, err := parseCompleteResponse(raw)
+	if resp.Usage != nil {
+		resp.Usage.SetTiming(start, time.Time{}, time.Now())
+	}
+	return resp, err
 }
 
 // parseCompleteResponse maps a non-streaming chat-completions JSON body onto
@@ -63,7 +69,7 @@ func parseCompleteResponse(body []byte) (llm.Response, error) {
 		if isContentFilterErrorEnvelope(chunk.Error) {
 			cause = llm.ErrContentFiltered
 		}
-		return llm.Response{Usage: toLLMUsage(chunk.Usage)}, fmt.Errorf("openrouter: %s: %w", msg, cause)
+		return llm.Response{Usage: chunkUsage(&chunk)}, fmt.Errorf("openrouter: %s: %w", msg, cause)
 	}
 
 	var resp llm.Response
@@ -80,7 +86,7 @@ func parseCompleteResponse(body []byte) (llm.Response, error) {
 	if calls := asm.flush(); len(calls) > 0 {
 		resp.ToolCalls = append(resp.ToolCalls, calls...)
 	}
-	if u := toLLMUsage(chunk.Usage); u != nil {
+	if u := chunkUsage(&chunk); u != nil {
 		resp.Usage = u
 	}
 

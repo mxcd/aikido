@@ -11,6 +11,7 @@ import (
 	"io"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/mxcd/aikido/llm"
 )
@@ -39,7 +40,10 @@ const sseDoneToken = "[DONE]"
 //
 // The closing EventEnd carries FinishReason populated from the provider's
 // last finish_reason (or "content_filter"/"error" when surfaced as an error).
-func processStream(ctx context.Context, body io.Reader, out chan<- llm.Event) {
+//
+// start is when the call began; the usage event carries the provider and the
+// call's timing (llm.Usage.SetTiming) measured from it.
+func processStream(ctx context.Context, body io.Reader, out chan<- llm.Event, start time.Time) {
 	var endFinishReason string
 	defer func() {
 		emit(ctx, out, llm.Event{Kind: llm.EventEnd, FinishReason: endFinishReason})
@@ -51,8 +55,9 @@ func processStream(ctx context.Context, body io.Reader, out chan<- llm.Event) {
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 
 	var (
-		sawError  bool
-		usageSent bool
+		sawError    bool
+		usageSent   bool
+		firstOutput time.Time
 	)
 	// emitUsage emits the first usage block seen, once. A priced turn is worth
 	// exactly as much after an error as before one, so scanning continues past
@@ -61,10 +66,11 @@ func processStream(ctx context.Context, body io.Reader, out chan<- llm.Event) {
 		if usageSent || c.Usage == nil {
 			return
 		}
-		u := toLLMUsage(c.Usage)
+		u := chunkUsage(c)
 		if u == nil {
 			return
 		}
+		u.SetTiming(start, firstOutput, time.Now())
 		emit(ctx, out, llm.Event{Kind: llm.EventUsage, Usage: u})
 		usageSent = true
 	}
@@ -140,6 +146,9 @@ func processStream(ctx context.Context, body io.Reader, out chan<- llm.Event) {
 
 		// Per-choice processing. Single-choice in practice, but be tolerant.
 		for _, ch := range chunk.Choices {
+			if firstOutput.IsZero() && (ch.Delta.hasOutput() || (ch.Message != nil && ch.Message.hasOutput())) {
+				firstOutput = time.Now()
+			}
 			emitPayload(ctx, out, asm, ch.Delta)
 			// Some image-capable models deliver the generated image as a
 			// non-streaming `choices[0].message` payload instead of a `delta`.

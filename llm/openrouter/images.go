@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/mxcd/aikido/llm"
 )
@@ -34,11 +35,16 @@ func (c *Client) GenerateImage(ctx context.Context, req llm.ImageRequest) (llm.I
 	if err != nil {
 		return llm.ImageResponse{}, fmt.Errorf("openrouter: images: %w", err)
 	}
+	start := time.Now()
 	raw, err := c.postJSON(ctx, "/images", body)
 	if err != nil {
 		return llm.ImageResponse{}, err
 	}
-	return parseImagesResponse(raw)
+	resp, err := parseImagesResponse(raw)
+	if resp.Usage != nil {
+		resp.Usage.SetTiming(start, time.Time{}, time.Now())
+	}
+	return resp, err
 }
 
 // sizePattern is the endpoint's `size` shape: WIDTHxHEIGHT in pixels.
