@@ -15,6 +15,7 @@ Backed by OpenRouter in v1; designed so v2 can plug in direct providers (Anthrop
 - **`llm/codex`** - the Codex backend of a ChatGPT subscription (bills the subscription, not an API key): device-code login, a `TokenSource` that refreshes and hands every rotated login back for persisting, streaming text, image input and structured output. No tools, no audio input.
 - **`llm.Transcribe`** - speech-to-text over any client that accepts audio input (`llm.Message.Audio`, sent by `llm/openrouter` as `input_audio`), with `llm.AudioFormat` for browser MIME types and an `llm.Vocabulary` of expected terms that biases the prompt and corrects the transcript.
 - **`llm.SpeechGenerator`** - text-to-speech, implemented by `llm/openrouter` on `POST /api/v1/audio/speech` (ElevenLabs, OpenAI, Gemini and other TTS models).
+- **`llm.VideoGenerator`** - video generation (Veo, Kling, Seedance, Wan, ...), implemented by `llm/openrouter` on `POST /api/v1/videos`: submit, poll, download in one blocking call, text-to-video or first/last frame, `Client.VideoModels` for each model's accepted durations, resolutions and ratios.
 - **`voice`** - one agent turn with speech in and/or out: transcription, per-sentence speech synthesis while the model still writes, typed events, cost over all stages, and an NDJSON `net/http` handler.
 - **`llm.Request.ResponseFormat`** - structured output (`llm.JSONSchema`), mapped by `llm/openrouter` and `llm/codex`.
 - **`llm/llmtest`** — `StubClient` for scripting multi-turn conversations in your tests.
@@ -175,6 +176,31 @@ t, err := llm.TranscribeDetailed(ctx, client, llm.TranscribeRequest{Audio: clip,
 A reply that is only a short bracketed phrase counts as no speech, so a
 German hint answering `[keine Sprache]` returns `""` as well.
 
+### Video generation
+
+`llm/openrouter` implements the optional `llm.VideoGenerator` capability on
+OpenRouter's job API (`POST /api/v1/videos`, poll, `/content`). The call
+blocks until the clip is downloaded, usually one to five minutes, so bound it
+with `ctx`. Every model takes a closed set of values and rejects the rest
+(Veo: 4, 6 or 8 s); `client.VideoModels(ctx)` lists them.
+
+```go
+off := false
+resp, err := client.GenerateVideo(ctx, llm.VideoRequest{
+    Model:         "google/veo-3.1-lite",
+    Prompt:        "A paper boat drifts across a calm pond at sunrise, static camera",
+    AspectRatio:   "16:9",
+    Resolution:    "720p",
+    Duration:      4,
+    GenerateAudio: &off,                                         // nil leaves the model default
+    FirstFrame:    &llm.ImagePart{Data: png, ContentType: "image/png"}, // optional
+})
+// resp.Video (mp4 bytes), resp.JobID, resp.Usage.CostUSD (0.12 here), resp.Usage.Duration
+```
+
+A refusal is `llm.ErrContentFiltered`: a failed job whose message reads like
+moderation, or a job that completes without a clip (Veo's silent rejection).
+
 ### Text-to-speech
 
 `llm/openrouter` implements the optional `llm.SpeechGenerator` capability on
@@ -318,9 +344,17 @@ aikido agent "Create plan.md with one bullet, then list files."
 aikido image --aspect 16:9 --size 2K "A pixel-art fox in tall grass."
 aikido image -m google/gemini-3.1-flash-image-preview "A quick draft."
 aikido image --ref logo.png --quality high "The same logo on a matte black mug."
+aikido video -d 4 -r 720p -a 16:9 --audio=false "A paper boat drifts across a pond."
+aikido video -m kwaivgi/kling-v3.0-pro --first-frame still.png "She blinks and smiles."
+aikido models --video kling
 ```
 
 `aikido --help` for the full flag list. `chat` and `agent` accept `--model`, `--system`, `--max-tokens`, `--temperature`.
+
+`video` defaults to `google/veo-3.1-lite` (`OPENROUTER_VIDEO_MODEL` or `-m`
+overrides it), writes `out/video-<timestamp>.mp4` and prints cost, wall time
+and the job id. Unset flags are not sent; `aikido models --video` shows the
+durations, resolutions, ratios, frames and audio switch each model accepts.
 
 `image` defaults to `openai/gpt-image-2.5-flare`, which OpenRouter serves only
 through `POST /api/v1/images`; `OPENROUTER_IMAGE_MODEL` or `-m` overrides it.

@@ -744,3 +744,50 @@ client; no call reported its provider, latency or throughput.
 copies it field by field (voice) must not add up timing. Speech
 (`/audio/speech`) has no Usage and gets no timing. Provider prefs apply to
 chat completions only, not to the images or speech endpoints.
+
+## ADR-035 - Video generation as an optional `VideoGenerator` capability
+
+**Date:** 22.10.2026
+**Status:** Accepted
+
+**Context.** OpenRouter serves video models (Veo 3.1, Kling 3.0, Seedance 2,
+Wan 3, Grok Imagine, Hailuo, ...) on a job API: `POST /api/v1/videos` answers
+202 with a job id, `GET /videos/{id}` reports `pending`, `in_progress`,
+`completed` or `failed` with `usage.cost`, and `GET /videos/{id}/content?index=0`
+serves the mp4 under the same bearer token. `GET /videos/models` (not part of
+`/models`) lists per model the closed sets of durations, resolutions, ratios,
+sizes and frame types, and whether `generate_audio` exists. hub-sandbox ran a
+client in this shape since 15.09.2026, written to be lifted into aikido.
+Verified live on 22.10.2026: `google/veo-3.1-lite`, 4 s 720p 16:9 without
+audio, 0.12 USD, 38 s wall clock.
+
+**Decision.**
+- `llm.VideoGenerator` with `GenerateVideo(ctx, VideoRequest) (VideoResponse, error)`,
+  optional like `ImageGenerator` (ADR-029) and `SpeechGenerator` (ADR-031).
+  `openrouter.Client` and `llmtest.StubClient` implement it.
+- **One blocking call** (submit, poll every `Options.VideoPollInterval`,
+  default 3 s, download), bounded by ctx. A submit/poll split was rejected:
+  no caller needs to persist a running job yet. `VideoResponse.JobID` is kept
+  on every error after the submit, so a paid job is traceable.
+- Every optional field is off the wire when unset, `GenerateAudio` and `Seed`
+  as pointers: providers reject fields they do not know instead of ignoring
+  them. No snapping of durations or ratios to the model's lists in the
+  library; `Client.VideoModels` exposes them and the caller decides.
+- `do` takes the expected status: the submit wants 202, every other path stays
+  200-only (ADR-029). Each submit, poll and download request retries per
+  `MaxAttempts`.
+- Refusals map onto `ErrContentFiltered`: a failed job or a 400 whose message
+  reads like moderation (no provider sends a code), and a `completed` job
+  without `unsigned_urls` or `urls`, which is how Veo reports a silent safety
+  rejection.
+- `Usage` carries `CostUSD` and the job's wall clock as `Latency`/`Duration`,
+  no tokens.
+- CLI: `aikido video` (default `google/veo-3.1-lite`, `OPENROUTER_VIDEO_MODEL`)
+  and `aikido models --video [filter]`.
+
+**Consequences.** Additive surface: `VideoRequest`, `VideoResponse`,
+`VideoGenerator`, `Client.GenerateVideo`, `Client.VideoModels`,
+`Options.VideoPollInterval`, `StubClient.ScriptVideos` and `VideoRequests`.
+Not covered: `callback_url` webhooks, provider passthrough options, multiple
+outputs per job (only index 0 is downloaded), video input (FLUX Video Edit),
+and a download size cap. hub-sandbox can drop `internal/ai/video` for this.
