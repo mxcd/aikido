@@ -46,8 +46,16 @@ type VideoScript struct {
 	Err      error
 }
 
+// DecisionScript is one scripted Decide outcome. Err short-circuits the
+// call; otherwise Response is returned verbatim.
+type DecisionScript struct {
+	Response llm.DecisionResponse
+	Err      error
+}
+
 // StubClient is a scriptable llm.Client that also implements the optional
-// llm.ImageGenerator, llm.SpeechGenerator and llm.VideoGenerator capabilities.
+// llm.ImageGenerator, llm.SpeechGenerator, llm.VideoGenerator and llm.Decider
+// capabilities.
 type StubClient struct {
 	mu            sync.Mutex
 	turns         []TurnScript
@@ -62,6 +70,9 @@ type StubClient struct {
 	videos        []VideoScript
 	videoCursor   int
 	videoReqs     []llm.VideoRequest
+	decisions     []DecisionScript
+	decisionCur   int
+	decisionReqs  []llm.DecisionRequest
 }
 
 var (
@@ -69,6 +80,7 @@ var (
 	_ llm.ImageGenerator  = (*StubClient)(nil)
 	_ llm.SpeechGenerator = (*StubClient)(nil)
 	_ llm.VideoGenerator  = (*StubClient)(nil)
+	_ llm.Decider         = (*StubClient)(nil)
 )
 
 // NewStubClient returns a StubClient that plays the given turn scripts in order.
@@ -257,5 +269,36 @@ func (s *StubClient) GenerateVideo(_ context.Context, req llm.VideoRequest) (llm
 	script := s.videos[s.videoCursor]
 	s.videoCursor++
 	s.videoReqs = append(s.videoReqs, req)
+	return script.Response, script.Err
+}
+
+// ScriptDecisions appends decision scripts consumed by Decide in order.
+func (s *StubClient) ScriptDecisions(scripts ...DecisionScript) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.decisions = append(s.decisions, scripts...)
+}
+
+// DecisionRequests returns a snapshot of every llm.DecisionRequest the stub
+// has been called with, in order.
+func (s *StubClient) DecisionRequests() []llm.DecisionRequest {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]llm.DecisionRequest, len(s.decisionReqs))
+	copy(out, s.decisionReqs)
+	return out
+}
+
+// Decide consumes one DecisionScript. Returns ErrStubExhausted when no
+// decision scripts remain.
+func (s *StubClient) Decide(_ context.Context, req llm.DecisionRequest) (llm.DecisionResponse, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.decisionCur >= len(s.decisions) {
+		return llm.DecisionResponse{}, ErrStubExhausted
+	}
+	script := s.decisions[s.decisionCur]
+	s.decisionCur++
+	s.decisionReqs = append(s.decisionReqs, req)
 	return script.Response, script.Err
 }

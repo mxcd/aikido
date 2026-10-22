@@ -236,19 +236,19 @@ func (c *Client) postJSON(ctx context.Context, path string, body []byte) ([]byte
 // post is postJSON with a caller-chosen Accept header that also returns the
 // response headers, for endpoints whose 200 body is not JSON (speech).
 func (c *Client) post(ctx context.Context, path string, body []byte, accept string) ([]byte, http.Header, error) {
-	return c.do(ctx, http.MethodPost, path, body, accept, http.StatusOK)
+	return c.do(ctx, http.MethodPost, c.baseURL+path, body, accept, http.StatusOK)
 }
 
-// do sends one request with retry and returns the body and headers of an
-// answer with status want. Any other status is an error, so an unexpected 201
+// do sends one request to url with retry and returns the body and headers of
+// an answer with status want. Any other status is an error, so an unexpected 201
 // is never parsed as a result (ADR-029); only the video submit wants 202.
-func (c *Client) do(ctx context.Context, method, path string, body []byte, accept string, want int) ([]byte, http.Header, error) {
+func (c *Client) do(ctx context.Context, method, url string, body []byte, accept string, want int) ([]byte, http.Header, error) {
 	var (
 		raw    []byte
 		header http.Header
 	)
 	err := retry.Do(ctx, c.retryPolicy(), func(_ int) error {
-		httpReq, err := http.NewRequestWithContext(ctx, method, c.baseURL+path, bytes.NewReader(body))
+		httpReq, err := http.NewRequestWithContext(ctx, method, url, bytes.NewReader(body))
 		if err != nil {
 			return fmt.Errorf("openrouter: build http request: %w", err)
 		}

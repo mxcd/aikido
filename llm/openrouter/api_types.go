@@ -478,3 +478,52 @@ type videoJob struct {
 		Cost float64 `json:"cost"`
 	} `json:"usage"`
 }
+
+// decisionsRequest is the POST /api/alpha/decisions body.
+type decisionsRequest struct {
+	Model     string                         `json:"model"`
+	State     any                            `json:"state"`
+	Questions map[string]apiDecisionQuestion `json:"questions"`
+	Provider  *ProviderPrefs                 `json:"provider,omitempty"`
+}
+
+// apiDecisionQuestion's criteria is a map for choice and noul, a list for
+// score and absent for box.
+type apiDecisionQuestion struct {
+	Type         string `json:"type"`
+	Instructions string `json:"instructions"`
+	Criteria     any    `json:"criteria,omitempty"`
+}
+
+// apiStateImage is an image inside a decisions state array.
+type apiStateImage struct {
+	ImageURL apiImageURL `json:"image_url"`
+}
+
+type decisionsResponse struct {
+	ID       string                       `json:"id"`
+	Model    string                       `json:"model"`
+	Provider string                       `json:"provider"`
+	Answers  map[string]apiDecisionAnswer `json:"answers"`
+	Usage    struct {
+		InputTokens  int     `json:"input_tokens"`
+		OutputTokens int     `json:"output_tokens"`
+		Cost         float64 `json:"cost"`
+	} `json:"usage"`
+}
+
+type apiDecisionAnswer struct {
+	Type          string             `json:"type"`
+	Noul          float64            `json:"noul"`
+	Choice        string             `json:"choice"`
+	Score         float64            `json:"score"`
+	Probabilities map[string]float64 `json:"probabilities"`
+	Legend        map[string]any     `json:"legend"`
+	Confidence    float64            `json:"confidence"`
+	Box           *struct {
+		Top    float64 `json:"top"`
+		Bottom float64 `json:"bottom"`
+		Left   float64 `json:"left"`
+		Right  float64 `json:"right"`
+	} `json:"box"`
+}

@@ -32,7 +32,7 @@ func (c *Client) GenerateVideo(ctx context.Context, req llm.VideoRequest) (llm.V
 		return llm.VideoResponse{}, fmt.Errorf("openrouter: video: %w", err)
 	}
 	start := time.Now()
-	raw, _, err := c.do(ctx, http.MethodPost, "/videos", body, "application/json", http.StatusAccepted)
+	raw, _, err := c.do(ctx, http.MethodPost, c.baseURL+"/videos", body, "application/json", http.StatusAccepted)
 	if err != nil {
 		if errors.Is(err, llm.ErrInvalidRequest) && refusal(err.Error()) {
 			return llm.VideoResponse{}, fmt.Errorf("%w: %w", err, llm.ErrContentFiltered)
@@ -53,7 +53,7 @@ func (c *Client) GenerateVideo(ctx context.Context, req llm.VideoRequest) (llm.V
 	if job.Usage != nil {
 		resp.Usage.CostUSD = job.Usage.Cost
 	}
-	resp.Video, _, err = c.do(ctx, http.MethodGet, "/videos/"+id+"/content?index=0", nil, "video/*", http.StatusOK)
+	resp.Video, _, err = c.do(ctx, http.MethodGet, c.baseURL+"/videos/"+id+"/content?index=0", nil, "video/*", http.StatusOK)
 	if err != nil {
 		return resp, err
 	}
@@ -93,7 +93,7 @@ func (c *Client) awaitVideo(ctx context.Context, id string, job videoJob) (video
 			return job, ctx.Err()
 		case <-t.C:
 		}
-		raw, _, err := c.do(ctx, http.MethodGet, "/videos/"+id, nil, "application/json", http.StatusOK)
+		raw, _, err := c.do(ctx, http.MethodGet, c.baseURL+"/videos/"+id, nil, "application/json", http.StatusOK)
 		if err != nil {
 			return job, err
 		}
