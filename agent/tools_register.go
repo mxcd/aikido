@@ -18,11 +18,16 @@ type VFSToolOptions struct {
 	// for fixed-corpus deployments (e.g. an embedded knowledge base over
 	// vfs/embedfs). Search and list/read remain registered.
 	ReadOnly bool
+
+	// DisableExtended skips registration of grep, glob and edit_file, leaving
+	// the original read_file/write_file/list_files/delete_file/search set.
+	DisableExtended bool
 }
 
-// RegisterVFSTools registers read_file, list_files into the supplied registry,
-// plus write_file/delete_file when not read-only. If opts.Storage satisfies
-// vfs.Searchable, also registers `search`. Tool handlers capture opts.Storage
+// RegisterVFSTools registers read_file, list_files, grep and glob into the
+// supplied registry, plus write_file, delete_file and edit_file when not
+// read-only (grep, glob and edit_file are skipped with DisableExtended). If
+// opts.Storage satisfies vfs.Searchable, also registers `search`. Tool handlers capture opts.Storage
 // via closure (ADR-021).
 func RegisterVFSTools(reg *tools.Registry, opts *VFSToolOptions) error {
 	if reg == nil {
@@ -48,6 +53,19 @@ func RegisterVFSTools(reg *tools.Registry, opts *VFSToolOptions) error {
 		}
 		if err := reg.Register(deleteFileDef(), deleteFileHandler(cp)); err != nil {
 			return err
+		}
+	}
+	if !cp.DisableExtended {
+		if err := reg.Register(grepDef(), grepHandler(cp)); err != nil {
+			return err
+		}
+		if err := reg.Register(globDef(), globHandler(cp)); err != nil {
+			return err
+		}
+		if !cp.ReadOnly {
+			if err := reg.Register(editFileDef(), editFileHandler(cp)); err != nil {
+				return err
+			}
 		}
 	}
 	if searchable, ok := cp.Storage.(vfs.Searchable); ok {
