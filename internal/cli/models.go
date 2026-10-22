@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 	"strings"
 	"text/tabwriter"
 
@@ -18,6 +19,7 @@ import (
 type modelCatalog interface {
 	Models(ctx context.Context) ([]openrouter.Model, error)
 	ModelEndpoints(ctx context.Context, id string) (openrouter.ModelEndpoints, error)
+	VideoModels(ctx context.Context) ([]openrouter.VideoModel, error)
 }
 
 func modelsCommand(factory ClientFactory) *urfavecli.Command {
@@ -28,7 +30,11 @@ func modelsCommand(factory ClientFactory) *urfavecli.Command {
 		Description: "Without an argument, lists every model (id, context, $/M in and out).\n" +
 			"A plain word filters that list by substring. An author/slug id prints the\n" +
 			"providers serving that model: tag (the slug for --provider), quantization,\n" +
-			"prices, uptime and p50 latency / throughput over the last 30 minutes.",
+			"prices, uptime and p50 latency / throughput over the last 30 minutes.\n" +
+			"--video lists the video models with the values `aikido video` accepts.",
+		Flags: []urfavecli.Flag{
+			&urfavecli.BoolFlag{Name: "video", Usage: "List video-generation models (durations, resolutions, ratios, frames, audio)"},
+		},
 		Action: func(ctx context.Context, cmd *urfavecli.Command) error {
 			client, err := factory()
 			if err != nil {
@@ -40,6 +46,9 @@ func modelsCommand(factory ClientFactory) *urfavecli.Command {
 			}
 			arg := strings.TrimSpace(cmd.Args().First())
 			out := resolveWriter(cmd)
+			if cmd.Bool("video") {
+				return printVideoModels(ctx, out, catalog, arg)
+			}
 			if strings.Contains(arg, "/") {
 				return printEndpoints(ctx, out, catalog, arg)
 			}
@@ -62,6 +71,54 @@ func printModels(ctx context.Context, out io.Writer, c modelCatalog, filter stri
 		fmt.Fprintf(tw, "%s\t%d\t%.2f\t%.2f\n", m.ID, m.ContextLength, m.Pricing.Prompt.PerMillion(), m.Pricing.Completion.PerMillion())
 	}
 	return tw.Flush()
+}
+
+func printVideoModels(ctx context.Context, out io.Writer, c modelCatalog, filter string) error {
+	models, err := c.VideoModels(ctx)
+	if err != nil {
+		return err
+	}
+	tw := tabwriter.NewWriter(out, 0, 0, 2, ' ', 0)
+	fmt.Fprintln(tw, "ID\tDURATIONS\tRESOLUTIONS\tRATIOS\tFRAMES\tAUDIO")
+	for _, m := range models {
+		if filter != "" && !strings.Contains(strings.ToLower(m.ID), strings.ToLower(filter)) {
+			continue
+		}
+		audio := "-"
+		if m.GenerateAudio != nil {
+			audio = fmt.Sprint(*m.GenerateAudio)
+		}
+		res := m.SupportedResolutions
+		if len(res) == 0 {
+			res = m.SupportedSizes
+		}
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n", m.ID, durations(m.SupportedDurations),
+			listOrDash(res), listOrDash(m.SupportedAspectRatios), listOrDash(m.SupportedFrameImages), audio)
+	}
+	return tw.Flush()
+}
+
+// durations prints a contiguous run as "3-15" and anything else as a list.
+func durations(d []int) string {
+	if len(d) == 0 {
+		return "-"
+	}
+	d = slices.Sorted(slices.Values(d))
+	if len(d) > 2 && d[len(d)-1]-d[0] == len(d)-1 {
+		return fmt.Sprintf("%d-%d", d[0], d[len(d)-1])
+	}
+	s := make([]string, len(d))
+	for i, v := range d {
+		s[i] = fmt.Sprint(v)
+	}
+	return strings.Join(s, ",")
+}
+
+func listOrDash(s []string) string {
+	if len(s) == 0 {
+		return "-"
+	}
+	return strings.Join(s, ",")
 }
 
 func printEndpoints(ctx context.Context, out io.Writer, c modelCatalog, id string) error {
