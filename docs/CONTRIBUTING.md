@@ -6,7 +6,7 @@ aikido is small, opinionated, and meant to stay that way. Read [DECISIONS.md](DE
 
 **Prerequisites:**
 
-- Go 1.23 or newer
+- Go 1.25 or newer
 - [`just`](https://github.com/casey/just) for task running
 - [`golangci-lint`](https://golangci-lint.run/) for linting
 
@@ -23,7 +23,7 @@ just check        # vet + lint + test
 See [ARCHITECTURE.md](ARCHITECTURE.md) for the full package map. In short:
 
 - `llm/`, `llm/openrouter/`, `llm/llmtest/` — provider abstraction and helpers.
-- `tools/`, `vfs/`, `vfs/memory/` — tool registry and storage.
+- `tools/`, `vfs/`, `vfs/memory/`, `vfs/embedfs/`, `vfs/osfs/` — tool registry and storage.
 - `agent/`, `agent/history/memory/` — agent loop and bundled in-memory backends. (v1.1 adds `agent/locker/redis`.)
 - `internal/retry/` — internal exponential backoff helper.
 - `examples/` — runnable examples; every file must compile in CI.

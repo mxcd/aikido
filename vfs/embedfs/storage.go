@@ -21,7 +21,6 @@ import (
 	"fmt"
 	"io/fs"
 	"net/http"
-	"path"
 	"sort"
 	"strings"
 
@@ -153,25 +152,13 @@ func (s *Storage) SearchSyntax() string {
 }
 
 func contentTypeFor(p string) string {
-	switch strings.ToLower(path.Ext(p)) {
-	case ".md", ".markdown":
-		return "text/markdown"
-	case ".txt":
-		return "text/plain"
-	case ".json":
-		return "application/json"
-	case ".yaml", ".yml":
-		return "application/yaml"
-	case ".html", ".htm":
-		return "text/html"
-	case ".csv":
-		return "text/csv"
-	default:
-		if ct := http.DetectContentType([]byte(p)); ct != "" {
-			return ct
-		}
-		return "application/octet-stream"
+	if ct := vfs.ContentTypeFor(p); ct != "" {
+		return ct
 	}
+	if ct := http.DetectContentType([]byte(p)); ct != "" {
+		return ct
+	}
+	return "application/octet-stream"
 }
 
 func isNotExist(err error) bool {
